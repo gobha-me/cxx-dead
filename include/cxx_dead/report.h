@@ -3,16 +3,39 @@
 #include "cxx_dead/graph.h"
 
 #include <iosfwd>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace cxx_dead {
 
+enum class Classification {
+    Dead,
+    LikelyDead,
+    PossiblyDead,
+    DynamicallyReferenced,
+};
+
+enum class FindingEvidenceKind {
+    NoReachablePath,
+    InternalLinkage,
+    VirtualDispatchUncertainty,
+    Escape,
+};
+
+struct FindingEvidence {
+    FindingEvidenceKind kind{FindingEvidenceKind::NoReachablePath};
+    Evidence evidence;
+    std::optional<EscapeKind> escape_kind;
+    std::optional<SymbolId> from;
+};
+
 struct Finding {
     SymbolId symbol{};
-    std::string classification;
+    Classification classification{Classification::LikelyDead};
     double confidence{0.0};
-    std::string reason;
+    std::vector<FindingEvidence> evidence;
 };
 
 struct AnalysisReport {
@@ -23,6 +46,8 @@ struct AnalysisReport {
 };
 
 [[nodiscard]] AnalysisReport build_report(const Graph& graph, const ReachabilityResult& result);
+[[nodiscard]] std::string_view to_string(Classification classification);
+[[nodiscard]] std::string_view to_string(FindingEvidenceKind kind);
 void write_human_report(std::ostream& output, const Graph& graph,
                         const ReachabilityResult& reachability, const AnalysisReport& report,
                         const std::vector<std::string>& diagnostics);

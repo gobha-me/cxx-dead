@@ -24,7 +24,23 @@ enum class EdgeKind {
     DirectCall,
     Constructs,
     VirtualDispatch,
+};
+
+enum class RootKind {
+    ApplicationEntryPoint,
+    GlobalInitializer,
+    Manual,
+};
+
+enum class EscapeKind {
     AddressTaken,
+};
+
+struct Evidence {
+    std::string provider;
+    std::string reason;
+
+    bool operator==(const Evidence&) const = default;
 };
 
 struct Symbol {
@@ -41,20 +57,35 @@ struct Symbol {
     bool project_owned{false};
     bool internal_linkage{false};
     bool is_virtual{false};
-    bool address_taken{false};
 };
 
 struct Edge {
     SymbolId from{};
     SymbolId to{};
     EdgeKind kind{EdgeKind::DirectCall};
+    Evidence evidence;
+};
+
+struct Root {
+    SymbolId symbol{};
+    RootKind kind{RootKind::ApplicationEntryPoint};
+    Evidence evidence;
+};
+
+struct Escape {
+    SymbolId symbol{};
+    std::optional<SymbolId> from;
+    EscapeKind kind{EscapeKind::AddressTaken};
+    Evidence evidence;
 };
 
 class Graph {
   public:
     SymbolId add_or_merge_symbol(Symbol symbol);
-    void add_edge(SymbolId from, SymbolId to, EdgeKind kind);
-    void add_root(SymbolId id, std::string reason);
+    void add_edge(SymbolId from, SymbolId to, EdgeKind kind, Evidence evidence);
+    void add_root(SymbolId id, RootKind kind, Evidence evidence);
+    void add_escape(SymbolId id, EscapeKind kind, Evidence evidence,
+                    std::optional<SymbolId> from = std::nullopt);
 
     [[nodiscard]] std::optional<SymbolId> find_by_key(std::string_view key) const;
     [[nodiscard]] const std::vector<Symbol>& symbols() const {
@@ -66,15 +97,19 @@ class Graph {
     [[nodiscard]] const std::vector<Edge>& edges() const {
         return edges_;
     }
-    [[nodiscard]] const std::unordered_map<SymbolId, std::vector<std::string>>& roots() const {
+    [[nodiscard]] const std::vector<Root>& roots() const {
         return roots_;
+    }
+    [[nodiscard]] const std::vector<Escape>& escapes() const {
+        return escapes_;
     }
 
   private:
     std::vector<Symbol> symbols_;
     std::vector<Edge> edges_;
     std::unordered_map<std::string, SymbolId> key_to_id_;
-    std::unordered_map<SymbolId, std::vector<std::string>> roots_;
+    std::vector<Root> roots_;
+    std::vector<Escape> escapes_;
 };
 
 struct ReachabilityResult {
@@ -86,5 +121,7 @@ struct ReachabilityResult {
 [[nodiscard]] ReachabilityResult analyze_reachability(const Graph& graph);
 [[nodiscard]] std::string_view to_string(SymbolKind kind);
 [[nodiscard]] std::string_view to_string(EdgeKind kind);
+[[nodiscard]] std::string_view to_string(RootKind kind);
+[[nodiscard]] std::string_view to_string(EscapeKind kind);
 
 } // namespace cxx_dead

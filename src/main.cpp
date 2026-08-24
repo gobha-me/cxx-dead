@@ -66,7 +66,7 @@ CliOptions parse_cli(int count, char** arguments) {
             std::exit(0);
         }
         if (argument == "--version") {
-            std::cout << "cxx-dead 0.1.1\n";
+            std::cout << "cxx-dead 0.2.0\n";
             std::exit(0);
         }
         if (argument == "--compile-commands") {

@@ -319,8 +319,12 @@ void collect_declarations(const Value& node, TranslationUnitState& state, std::s
             };
             const auto symbol_id = state.graph.add_or_merge_symbol(std::move(symbol));
             state.declarations[ast_id] = symbol_id;
-            if (name == "main" && has_body(node))
-                state.graph.add_root(symbol_id, "application entry point");
+            if (name == "main" && has_body(node)) {
+                state.graph.add_root(
+                    symbol_id, RootKind::ApplicationEntryPoint,
+                    {.provider = "application_policy",
+                     .reason = "defined function named main is an application entry point"});
+            }
         }
     }
 
@@ -368,10 +372,26 @@ bool is_call_expression(std::string_view kind) {
 
 void add_use(TranslationUnitState& state, std::optional<SymbolId> caller, SymbolId target,
              EdgeKind kind, bool global_initializer) {
-    if (caller.has_value())
-        state.graph.add_edge(*caller, target, kind);
-    else if (global_initializer)
-        state.graph.add_root(target, "global initializer");
+    if (caller.has_value()) {
+        std::string reason;
+        switch (kind) {
+        case EdgeKind::DirectCall:
+            reason = "direct call expression";
+            break;
+        case EdgeKind::Constructs:
+            reason = "constructor or destructor use";
+            break;
+        case EdgeKind::VirtualDispatch:
+            reason = "virtual dispatch";
+            break;
+        }
+        state.graph.add_edge(*caller, target, kind,
+                             {.provider = "clang_ast", .reason = std::move(reason)});
+    } else if (global_initializer) {
+        state.graph.add_root(
+            target, RootKind::GlobalInitializer,
+            {.provider = "clang_ast", .reason = "use from a namespace-scope variable initializer"});
+    }
 }
 
 void add_construction_edges(TranslationUnitState& state, std::optional<SymbolId> caller,
@@ -441,9 +461,10 @@ void collect_uses(const Value& node, TranslationUnitState& state, std::optional<
 
     if (!callee_position && (kind == "DeclRefExpr" || kind == "MemberExpr")) {
         for (const auto target : resolve_references(node, state)) {
-            state.graph.symbols()[target].address_taken = true;
-            if (caller.has_value())
-                state.graph.add_edge(*caller, target, EdgeKind::AddressTaken);
+            state.graph.add_escape(target, EscapeKind::AddressTaken,
+                                   {.provider = "clang_ast",
+                                    .reason = "function referenced outside a callee position"},
+                                   caller);
         }
     }
 
@@ -607,7 +628,9 @@ void add_virtual_dispatch_edges(Graph& graph,
                     const auto& base_symbol = graph.symbols()[base_id];
                     if (base_symbol.is_virtual && base_symbol.name == derived_symbol.name &&
                         base_symbol.signature == derived_symbol.signature) {
-                        graph.add_edge(base_id, derived, EdgeKind::VirtualDispatch);
+                        graph.add_edge(base_id, derived, EdgeKind::VirtualDispatch,
+                                       {.provider = "class_hierarchy",
+                                        .reason = "known override of a virtual method"});
                     }
                 }
             }
@@ -670,7 +693,9 @@ IndexResult ClangAstIndexer::index(const std::vector<CompileCommand>& commands) 
         for (SymbolId id = 0; id < result.graph.symbols().size(); ++id) {
             const auto& symbol = result.graph.symbols()[id];
             if (symbol.qualified_name == requested || symbol.key == requested) {
-                result.graph.add_root(id, "configured root");
+                result.graph.add_root(id, RootKind::Manual,
+                                      {.provider = "command_line",
+                                       .reason = "matched configured root: " + requested});
                 matched = true;
             }
         }

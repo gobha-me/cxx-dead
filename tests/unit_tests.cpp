@@ -56,20 +56,48 @@ void test_graph_algorithms() {
         {.key = "b", .name = "b", .defined = true, .project_owned = true});
     const auto escaped = graph.add_or_merge_symbol(
         {.key = "escaped", .name = "escaped", .defined = true, .project_owned = true});
-    graph.add_root(root, "test");
-    graph.add_edge(root, live, cxx_dead::EdgeKind::DirectCall);
-    graph.add_edge(dead_a, dead_b, cxx_dead::EdgeKind::DirectCall);
-    graph.add_edge(dead_b, dead_a, cxx_dead::EdgeKind::DirectCall);
-    graph.add_edge(root, escaped, cxx_dead::EdgeKind::AddressTaken);
+    const cxx_dead::Evidence test_evidence{.provider = "test_provider", .reason = "arbitrary"};
+    graph.add_root(root, cxx_dead::RootKind::Manual, test_evidence);
+    graph.add_root(root, cxx_dead::RootKind::Manual, test_evidence);
+    graph.add_edge(root, live, cxx_dead::EdgeKind::DirectCall, test_evidence);
+    graph.add_edge(root, live, cxx_dead::EdgeKind::DirectCall, test_evidence);
+    graph.add_edge(dead_a, dead_b, cxx_dead::EdgeKind::DirectCall, test_evidence);
+    graph.add_edge(dead_b, dead_a, cxx_dead::EdgeKind::DirectCall, test_evidence);
+    graph.add_escape(escaped, cxx_dead::EscapeKind::AddressTaken, test_evidence, root);
+    graph.add_escape(escaped, cxx_dead::EscapeKind::AddressTaken, test_evidence, root);
 
     const auto result = cxx_dead::analyze_reachability(graph);
     require(result.reachable[root] && result.reachable[live], "direct calls should be traversed");
-    require(!result.reachable[escaped], "address-taken edges must not imply a call");
+    require(!result.reachable[escaped], "address escapes must not imply a call");
     require(!result.reachable[dead_a] && !result.reachable[dead_b],
             "dead cycle was marked reachable");
     const bool found_cycle = std::ranges::any_of(
         result.unreachable_sccs, [](const auto& component) { return component.size() == 2U; });
     require(found_cycle, "Tarjan analysis did not identify the dead cycle");
+    require(graph.roots().size() == 1U && graph.edges().size() == 3U &&
+                graph.escapes().size() == 1U,
+            "duplicate structured evidence facts were not deduplicated");
+    require(graph.edges().front().evidence == test_evidence,
+            "graph edge did not retain its provider evidence");
+
+    bool invalid_escape_rejected = false;
+    try {
+        graph.add_escape(graph.symbols().size(), cxx_dead::EscapeKind::AddressTaken, test_evidence);
+    } catch (const std::out_of_range&) {
+        invalid_escape_rejected = true;
+    }
+    require(invalid_escape_rejected, "escape accepted an invalid symbol reference");
+
+    const auto report = cxx_dead::build_report(graph, result);
+    const auto escaped_finding =
+        std::ranges::find_if(report.findings, [=](const cxx_dead::Finding& finding) {
+            return finding.symbol == escaped;
+        });
+    require(escaped_finding != report.findings.end() &&
+                escaped_finding->classification == cxx_dead::Classification::DynamicallyReferenced,
+            "escape classification should depend on the typed fact, not its reason text");
+    require(escaped_finding->evidence.size() == 2U && escaped_finding->evidence.back().from == root,
+            "classification did not retain the specific escape evidence");
 }
 
 void test_clang_integration() {
@@ -95,8 +123,12 @@ void test_clang_integration() {
     require(!reachability.reachable[find_symbol(indexed.graph, "dead_b")],
             "dead_b should be unreachable");
     const auto escaped = find_symbol(indexed.graph, "escaped_callback");
-    require(!reachability.reachable[escaped] && indexed.graph.symbols()[escaped].address_taken,
-            "escaped callback should be uncertain, not statically called");
+    const auto escaped_fact =
+        std::ranges::find_if(indexed.graph.escapes(), [=](const cxx_dead::Escape& escape) {
+            return escape.symbol == escaped;
+        });
+    require(!reachability.reachable[escaped] && escaped_fact != indexed.graph.escapes().end(),
+            "escaped callback should retain an escape fact, not become statically called");
     require(reachability.reachable[find_symbol(indexed.graph, "initialize_global")],
             "namespace-scope initializer call should be a root");
     require(reachability.reachable[find_symbol(indexed.graph, "ConcreteRenderer::render")],
@@ -122,6 +154,18 @@ void test_clang_integration() {
                                 indexed.diagnostics);
     const auto report_json = cxx_dead::json::parse(json_output.str());
     require(report_json.find("findings") != nullptr, "JSON report has no findings field");
+    require(report_json.find("schema_version") != nullptr &&
+                report_json.find("schema_version")->as_number() == 2.0,
+            "JSON report does not use structured-evidence schema version 2");
+    require(report_json.find("roots") != nullptr && report_json.find("roots")->is_array(),
+            "JSON report has no structured roots field");
+
+    std::ostringstream human_output;
+    cxx_dead::write_human_report(human_output, indexed.graph, reachability, report,
+                                 indexed.diagnostics);
+    require(human_output.str().contains("ROOTS") &&
+                human_output.str().contains("[escape] clang_ast"),
+            "human report does not expose root and escape evidence");
 
     const cxx_dead::ClangAstIndexer filtered_indexer({
         .project_root = fixture,
@@ -134,6 +178,13 @@ void test_clang_integration() {
             "configured root was not retained by filtered indexing");
     require(filtered_reachability.reachable[find_symbol(filtered.graph, "live_helper")],
             "filtered indexing lost a cross-translation-unit call");
+    const auto configured =
+        std::ranges::find_if(filtered.graph.roots(), [](const cxx_dead::Root& root) {
+            return root.kind == cxx_dead::RootKind::Manual &&
+                   root.evidence.provider == "command_line";
+        });
+    require(configured != filtered.graph.roots().end(),
+            "configured root did not retain command-line evidence");
 }
 
 } // namespace

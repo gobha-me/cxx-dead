@@ -43,6 +43,35 @@ ctest --test-dir build --output-on-failure
 
 No LLVM development package or third-party JSON library is required by this prototype.
 
+## Install
+
+The portable CMake install command installs to the configured system prefix:
+
+```bash
+cmake --install build
+```
+
+With a Makefiles generator, `make -C build install` invokes the same install rules. To install for
+the current user without elevated privileges, override the prefix at install time:
+
+```bash
+cmake --install build --prefix "$HOME/.local"
+```
+
+This places the executable at `$HOME/.local/bin/cxx-dead`. Ensure `$HOME/.local/bin` is in `PATH`.
+An equivalent persistent configuration is:
+
+```bash
+cmake -S . -B build \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_INSTALL_PREFIX="$HOME/.local"
+cmake --build build --parallel 2
+cmake --build build --target install
+```
+
+Clang remains a runtime requirement: `cxx-dead` invokes `clang++` from `PATH` by default, or the
+executable supplied with `--clang`.
+
 ## Run
 
 Generate a compilation database for the application configuration under analysis. With CMake:

@@ -106,3 +106,11 @@ excluded entirely
 
 This field trial makes graph-scope/report-scope separation a prerequisite for trustworthy framework
 application analysis.
+
+## Scope-model follow-up
+
+Version 0.3.0 separates these policies. `--project-root` now bounds the indexed workspace, while
+repeatable `--report-path` values select owned definitions eligible for findings. For a future Null
+Vector rerun, use `include/` and `src/` as report paths while retaining the linked TermForge sources
+inside the indexed workspace. The reduced framework fixture covers the callback-to-application
+virtual-dispatch cascade; a target-aware rerun remains dependent on explicit link membership.

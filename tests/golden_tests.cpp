@@ -105,8 +105,8 @@ void verify_expectation(const cxx_dead::Graph& graph,
             std::string(expected.qualified_name) + " has the wrong symbol kind");
     require(symbol.internal_linkage == expected.internal_linkage,
             std::string(expected.qualified_name) + " has the wrong linkage evidence");
-    require(symbol.project_owned,
-            std::string(expected.qualified_name) + " should be project-owned");
+    require(symbol.scope == cxx_dead::SymbolScope::Reportable,
+            std::string(expected.qualified_name) + " should be reportable");
     require(!symbol.file.empty() && symbol.line != 0U,
             std::string(expected.qualified_name) + " should have a source location");
 
@@ -276,8 +276,8 @@ void test_golden_corpus() {
                                 indexed.diagnostics);
     const auto report_json = cxx_dead::json::parse(json_output.str());
     require(report_json.find("schema_version") != nullptr &&
-                report_json.find("schema_version")->as_number() == 2.0,
-            "golden JSON report should use schema version 2");
+                report_json.find("schema_version")->as_number() == 3.0,
+            "golden JSON report should use schema version 3");
     require(report_json.find("roots") != nullptr &&
                 report_json.find("roots")->as_array().size() >= 2U,
             "golden JSON report should expose structured root evidence");
@@ -289,7 +289,7 @@ void test_golden_corpus() {
                 escaped_json->find("evidence")->as_array().size() == 2U &&
                 escaped_json->find("reason") == nullptr &&
                 escaped_json->find("address_taken") == nullptr,
-            "escaped callback JSON should expose only the schema-v2 evidence chain");
+            "escaped callback JSON should retain its structured evidence chain");
 
     const auto macro = indexed.graph.symbols()[find_symbol(indexed.graph, "macro_dead", "void ()")];
     require(macro.file.filename() == "main.cpp", "macro expansion should map to its source file");

@@ -99,7 +99,7 @@ fully_unreachable_types(const Graph& graph, const ReachabilityResult& reachabili
     std::map<std::string, std::vector<SymbolId>> all_members;
     for (SymbolId id = 0; id < graph.symbols().size(); ++id) {
         const auto& symbol = graph.symbols()[id];
-        if (symbol.defined && symbol.project_owned && !symbol.class_name.empty()) {
+        if (symbol.defined && is_reportable(symbol.scope) && !symbol.class_name.empty()) {
             all_members[symbol.class_name].push_back(id);
         }
     }
@@ -123,7 +123,20 @@ AnalysisReport build_report(const Graph& graph, const ReachabilityResult& result
     AnalysisReport report;
     for (SymbolId id = 0; id < graph.symbols().size(); ++id) {
         const auto& symbol = graph.symbols()[id];
-        if (!symbol.defined || !symbol.project_owned || symbol.kind == SymbolKind::Synthetic)
+        switch (symbol.scope) {
+        case SymbolScope::Reportable:
+            ++report.reportable_symbols;
+            break;
+        case SymbolScope::Indexed:
+            ++report.indexed_symbols;
+            break;
+        case SymbolScope::ExternalOpaque:
+            ++report.external_opaque_symbols;
+            break;
+        case SymbolScope::Excluded:
+            break;
+        }
+        if (!symbol.defined || !is_reportable(symbol.scope) || symbol.kind == SymbolKind::Synthetic)
             continue;
         ++report.defined_symbols;
         if (result.reachable[id]) {
@@ -178,6 +191,9 @@ void write_human_report(std::ostream& output, const Graph& graph,
                         const std::vector<std::string>& diagnostics) {
     output << "cxx-dead application reachability report\n\n"
            << "SUMMARY\n"
+           << "  Graph symbols by scope:    " << report.reportable_symbols << " reportable, "
+           << report.indexed_symbols << " indexed, " << report.external_opaque_symbols
+           << " external opaque\n"
            << "  Defined project functions: " << report.defined_symbols << '\n'
            << "  Reachable:                 " << report.reachable_symbols << '\n'
            << "  Unreachable candidates:    " << report.unreachable_symbols << "\n\n";
@@ -186,6 +202,7 @@ void write_human_report(std::ostream& output, const Graph& graph,
     for (const auto& root : graph.roots()) {
         const auto& symbol = graph.symbols()[root.symbol];
         output << "  " << symbol.qualified_name << " [" << to_string(root.kind) << "]\n"
+               << "    Scope:    " << to_string(symbol.scope) << '\n'
                << "    Evidence: " << root.evidence.provider << ": " << root.evidence.reason
                << '\n';
     }
@@ -262,12 +279,17 @@ void write_json_report(std::ostream& output, const Graph& graph,
     }
 
     output << "{\n"
-           << "  \"schema_version\": 2,\n"
+           << "  \"schema_version\": 3,\n"
            << "  \"mode\": \"application\",\n"
            << "  \"summary\": {\n"
            << "    \"defined_symbols\": " << report.defined_symbols << ",\n"
            << "    \"reachable_symbols\": " << report.reachable_symbols << ",\n"
-           << "    \"unreachable_symbols\": " << report.unreachable_symbols << "\n"
+           << "    \"unreachable_symbols\": " << report.unreachable_symbols << ",\n"
+           << "    \"scope_counts\": {\n"
+           << "      \"reportable\": " << report.reportable_symbols << ",\n"
+           << "      \"indexed\": " << report.indexed_symbols << ",\n"
+           << "      \"external_opaque\": " << report.external_opaque_symbols << "\n"
+           << "    }\n"
            << "  },\n"
            << "  \"roots\": [";
     for (std::size_t index = 0; index < graph.roots().size(); ++index) {
@@ -277,6 +299,7 @@ void write_json_report(std::ostream& output, const Graph& graph,
                << "      \"symbol\": \"" << json::escape(symbol.qualified_name) << "\",\n"
                << "      \"key\": \"" << json::escape(symbol.key) << "\",\n"
                << "      \"kind\": \"" << to_string(root.kind) << "\",\n"
+               << "      \"scope\": \"" << to_string(symbol.scope) << "\",\n"
                << "      \"evidence\": {\n"
                << "        \"provider\": \"" << json::escape(root.evidence.provider) << "\",\n"
                << "        \"reason\": \"" << json::escape(root.evidence.reason) << "\"\n"
@@ -294,6 +317,7 @@ void write_json_report(std::ostream& output, const Graph& graph,
                << "      \"symbol\": \"" << json::escape(symbol.qualified_name) << "\",\n"
                << "      \"key\": \"" << json::escape(symbol.key) << "\",\n"
                << "      \"kind\": \"" << to_string(symbol.kind) << "\",\n"
+               << "      \"scope\": \"" << to_string(symbol.scope) << "\",\n"
                << "      \"file\": \"" << json::escape(symbol.file.string()) << "\",\n"
                << "      \"line\": " << symbol.line << ",\n"
                << "      \"classification\": \"" << to_string(finding.classification) << "\",\n"

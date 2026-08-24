@@ -40,6 +40,9 @@ struct Finding {
 
 struct AnalysisReport {
     std::vector<Finding> findings;
+    std::size_t reportable_symbols{0};
+    std::size_t indexed_symbols{0};
+    std::size_t external_opaque_symbols{0};
     std::size_t defined_symbols{0};
     std::size_t reachable_symbols{0};
     std::size_t unreachable_symbols{0};

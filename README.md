@@ -19,6 +19,7 @@ The prototype already handles:
 - aggregation when every defined member of a type is unreachable;
 - internal-linkage confidence evidence;
 - structured root, graph-edge, escape, and classification evidence;
+- separate reachability and reporting scopes for framework-aware analysis;
 - human and versioned JSON output.
 
 It does not yet reconstruct linker targets, infer library APIs, model arbitrary registration/plugin systems, analyze multiple build configurations, or scale efficiently to large standard-library-heavy projects. Findings are candidates for review, not deletion instructions.
@@ -116,6 +117,20 @@ cxx-dead build/compile_commands.json \
   --exclude-path build/_deps
 ```
 
+To retain framework code in reachability while reporting only application-owned paths, set the
+workspace boundary with `--project-root` and repeat `--report-path` for each owned subtree:
+
+```bash
+cxx-dead build/compile_commands.json \
+  --project-root . \
+  --report-path include \
+  --report-path src
+```
+
+Definitions elsewhere under the project root are indexed but never reported. Referenced declarations
+outside the project root are opaque graph terminals, and `--exclude-path` removes matching
+declarations entirely.
+
 `--fail-on-unreachable` returns status 2 when any unreachable candidate is present. Analysis/indexing errors return status 1. A successful advisory run returns status 0 regardless of findings.
 
 Run `cxx-dead --help` for all current options.
@@ -147,8 +162,8 @@ The numeric confidence values in JSON are provisional presentation values, not s
 
 Every classification is backed by an ordered evidence chain. Root, edge, and escape facts retain a
 provider and human-readable reason, while analysis decisions use typed facts rather than matching
-those presentation strings. JSON schema version 2 exposes roots and finding evidence explicitly;
-it replaces the version 1 finding-level `reason` and `address_taken` fields.
+those presentation strings. JSON schema version 3 exposes symbol scope counts and identifies the
+scope of roots and findings; version 2 introduced structured root and finding evidence.
 
 ## Current analysis contract
 
@@ -156,9 +171,10 @@ The compilation database is treated as one application and every listed translat
 
 Clang is invoked directly with normalized compile arguments and without a shell. Output/dependency-generation flags are removed, and AST JSON is captured in memory. Repository-provided compiler plugins or response files remain part of the trusted build input.
 
-Only declarations below `--project-root` are placed in the prototype graph. Calls into system and
-third-party code terminate at that boundary. This reduces AST graph pollution but means callbacks or
-construction performed inside library templates require explicit modeling.
+Definitions below `--project-root` participate in reachability. When `--report-path` is omitted, the
+whole project root is reportable for backward compatibility; otherwise only definitions below an
+explicit report path can become findings. Referenced declarations outside the project root are
+materialized lazily as opaque terminals, and excluded paths do not enter the graph.
 
 ## Design documents
 

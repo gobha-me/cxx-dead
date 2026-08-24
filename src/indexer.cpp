@@ -31,6 +31,7 @@ struct TranslationUnitState {
     Graph& graph;
     std::unordered_map<std::string, std::string> contexts;
     std::unordered_map<std::string, SymbolId> declarations;
+    std::unordered_map<std::string, Symbol> opaque_declarations;
     std::unordered_map<std::string, RecordInfo>& records;
 };
 
@@ -157,12 +158,22 @@ bool path_is_within(const std::filesystem::path& child, const std::filesystem::p
     return first != ".." && !relative.is_absolute();
 }
 
-bool is_project_file(const TranslationUnitState& state, const std::filesystem::path& file) {
-    return path_is_within(file, state.options.project_root) &&
-           std::ranges::none_of(state.options.excluded_paths,
-                                [&](const std::filesystem::path& excluded) {
-                                    return path_is_within(file, excluded);
-                                });
+SymbolScope symbol_scope(const TranslationUnitState& state, const std::filesystem::path& file) {
+    if (std::ranges::any_of(state.options.excluded_paths,
+                            [&](const std::filesystem::path& excluded) {
+                                return path_is_within(file, excluded);
+                            })) {
+        return SymbolScope::Excluded;
+    }
+    if (!path_is_within(file, state.options.project_root))
+        return SymbolScope::ExternalOpaque;
+    if (std::ranges::any_of(state.options.report_paths,
+                            [&](const std::filesystem::path& report_path) {
+                                return path_is_within(file, report_path);
+                            })) {
+        return SymbolScope::Reportable;
+    }
+    return SymbolScope::Indexed;
 }
 
 std::string type_string(const Value& node, std::string_view field = "type") {
@@ -243,7 +254,7 @@ void collect_contexts(const Value& node, TranslationUnitState& state, std::strin
         const auto name = node.string_or("name");
         if (!name.empty()) {
             child_scope = join_name(scope, name);
-            if (is_project_file(state, file)) {
+            if (has_indexed_body(symbol_scope(state, file))) {
                 if (const auto id = node.string_or("id"); !id.empty())
                     state.contexts[id] = child_scope;
                 auto& record = state.records[child_scope];
@@ -295,8 +306,8 @@ void collect_declarations(const Value& node, TranslationUnitState& state, std::s
         auto key = !mangled.empty() ? mangled : qualified + "|" + type_string(node);
         if (internal)
             key += "@" + state.command.file.string();
-        const bool project_owned = is_project_file(state, file);
-        if (!ast_id.empty() && !key.empty() && project_owned) {
+        const auto scope_kind = symbol_scope(state, file);
+        if (!ast_id.empty() && !key.empty() && scope_kind != SymbolScope::Excluded) {
             const auto line = node_line(node);
             Symbol symbol{
                 .key = std::move(key),
@@ -308,22 +319,26 @@ void collect_declarations(const Value& node, TranslationUnitState& state, std::s
                 .line = line,
                 .end_line = node_end_line(node, line),
                 .kind = symbol_kind(kind),
+                .scope = scope_kind,
                 // A FunctionDecl nested in a FunctionTemplateDecl describes the pattern and has no
                 // mangled identity. Concrete specializations are indexed separately. Reporting the
                 // pattern itself produces a false dead finding even when its instantiations are
                 // live.
-                .defined = has_body(node) && !mangled.empty(),
-                .project_owned = true,
+                .defined = has_indexed_body(scope_kind) && has_body(node) && !mangled.empty(),
                 .internal_linkage = internal,
                 .is_virtual = node.bool_or("virtual") || has_override_attribute(node),
             };
-            const auto symbol_id = state.graph.add_or_merge_symbol(std::move(symbol));
-            state.declarations[ast_id] = symbol_id;
-            if (name == "main" && has_body(node)) {
-                state.graph.add_root(
-                    symbol_id, RootKind::ApplicationEntryPoint,
-                    {.provider = "application_policy",
-                     .reason = "defined function named main is an application entry point"});
+            if (scope_kind == SymbolScope::ExternalOpaque) {
+                state.opaque_declarations.insert_or_assign(ast_id, std::move(symbol));
+            } else {
+                const auto symbol_id = state.graph.add_or_merge_symbol(std::move(symbol));
+                state.declarations[ast_id] = symbol_id;
+                if (name == "main" && has_body(node)) {
+                    state.graph.add_root(
+                        symbol_id, RootKind::ApplicationEntryPoint,
+                        {.provider = "application_policy",
+                         .reason = "defined function named main is an application entry point"});
+                }
             }
         }
     }
@@ -350,14 +365,20 @@ void collect_reference_ids(const Value& node, std::vector<std::string>& output) 
         collect_reference_ids(child, output);
 }
 
-std::vector<SymbolId> resolve_references(const Value& expression,
-                                         const TranslationUnitState& state) {
+std::vector<SymbolId> resolve_references(const Value& expression, TranslationUnitState& state) {
     std::vector<std::string> ast_ids;
     collect_reference_ids(expression, ast_ids);
     std::vector<SymbolId> result;
     for (const auto& ast_id : ast_ids) {
-        if (const auto found = state.declarations.find(ast_id);
-            found != state.declarations.end() &&
+        auto found = state.declarations.find(ast_id);
+        if (found == state.declarations.end()) {
+            if (const auto opaque = state.opaque_declarations.find(ast_id);
+                opaque != state.opaque_declarations.end()) {
+                const auto symbol = state.graph.add_or_merge_symbol(opaque->second);
+                found = state.declarations.emplace(ast_id, symbol).first;
+            }
+        }
+        if (found != state.declarations.end() &&
             std::ranges::find(result, found->second) == result.end()) {
             result.push_back(found->second);
         }
@@ -428,6 +449,8 @@ void collect_uses(const Value& node, TranslationUnitState& state, std::optional<
     if (is_function_kind(kind)) {
         if (const auto declaration = state.declarations.find(node.string_or("id"));
             declaration != state.declarations.end()) {
+            if (!has_indexed_body(state.graph.symbols()[declaration->second].scope))
+                return;
             caller = declaration->second;
         } else {
             // System-header function bodies do not contribute project-to-project edges. Avoid
@@ -642,6 +665,15 @@ void add_virtual_dispatch_edges(Graph& graph,
 
 ClangAstIndexer::ClangAstIndexer(IndexOptions options) : options_(std::move(options)) {
     options_.project_root = std::filesystem::absolute(options_.project_root).lexically_normal();
+    if (options_.report_paths.empty())
+        options_.report_paths.push_back(options_.project_root);
+    for (auto& report_path : options_.report_paths) {
+        report_path = std::filesystem::absolute(report_path).lexically_normal();
+        if (!path_is_within(report_path, options_.project_root)) {
+            throw std::invalid_argument("report path is outside the project root: " +
+                                        report_path.string());
+        }
+    }
     for (auto& excluded : options_.excluded_paths)
         excluded = std::filesystem::absolute(excluded).lexically_normal();
 }
@@ -676,7 +708,7 @@ IndexResult ClangAstIndexer::index(const std::vector<CompileCommand>& commands) 
             throw std::runtime_error("invalid Clang AST JSON for " + command.file.string() + ": " +
                                      error.what());
         }
-        TranslationUnitState state{command, options_, result.graph, {}, {}, records};
+        TranslationUnitState state{command, options_, result.graph, {}, {}, {}, records};
         for (const auto& ast : ast_documents)
             collect_contexts(ast, state, "", command.file);
         for (const auto& ast : ast_documents)

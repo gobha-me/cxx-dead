@@ -1,0 +1,12 @@
+[
+  {
+    "directory": ".",
+    "file": "app/app.cpp",
+    "arguments": ["clang++", "-std=c++23", "-c", "app/app.cpp", "-o", "app.o"]
+  },
+  {
+    "directory": ".",
+    "file": "framework/framework.cpp",
+    "arguments": ["clang++", "-std=c++23", "-c", "framework/framework.cpp", "-o", "framework.o"]
+  }
+]

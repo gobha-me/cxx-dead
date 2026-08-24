@@ -79,19 +79,70 @@ void write_human_evidence(std::ostream& output, const Graph& graph,
                << item.evidence.reason;
         if (item.escape_kind.has_value())
             output << " (" << to_string(*item.escape_kind) << ')';
-        if (item.from.has_value())
-            output << " from " << graph.symbols()[*item.from].qualified_name;
+        if (item.from.has_value()) {
+            const auto& source = graph.symbols()[*item.from];
+            output << " from " << source.qualified_name << " : " << source.signature;
+        }
         output << '\n';
     }
 }
 
-std::string location(const Symbol& symbol) {
-    if (symbol.file.empty())
+std::string location(const SourcePoint& point) {
+    if (point.file.empty())
         return "<unknown>";
-    auto result = symbol.file.string();
-    if (symbol.line != 0)
-        result += ":" + std::to_string(symbol.line);
+    auto result = point.file.string();
+    if (point.line != 0)
+        result += ":" + std::to_string(point.line);
+    if (point.column != 0)
+        result += ":" + std::to_string(point.column);
     return result;
+}
+
+std::string range(const SourceExtent& extent) {
+    return location(extent.begin) + " - " + location(extent.end);
+}
+
+std::string display_symbol(const Symbol& symbol) {
+    return symbol.qualified_name + " : " + symbol.signature;
+}
+
+void write_human_source(std::ostream& output, const Symbol& symbol, std::string_view indent) {
+    const auto& primary = primary_source_extent(symbol);
+    output << indent << "Location:         " << location(primary.location) << '\n'
+           << indent << "Definition range: " << range(primary) << '\n';
+    if (symbol.source.expansion.has_value()) {
+        output << indent << "Spelling:         " << location(symbol.source.spelling.location)
+               << '\n'
+               << indent << "Expansion:        " << location(symbol.source.expansion->location)
+               << '\n';
+    }
+}
+
+void write_json_source_point(std::ostream& output, const SourcePoint& point) {
+    output << "{\"file\": \"" << json::escape(point.file.string()) << "\", \"line\": " << point.line
+           << ", \"column\": " << point.column << ", \"offset\": " << point.offset
+           << ", \"token_length\": " << point.token_length << '}';
+}
+
+void write_json_source_extent(std::ostream& output, const SourceExtent& extent) {
+    output << "{\"location\": ";
+    write_json_source_point(output, extent.location);
+    output << ", \"range\": {\"begin\": ";
+    write_json_source_point(output, extent.begin);
+    output << ", \"end\": ";
+    write_json_source_point(output, extent.end);
+    output << "}}";
+}
+
+void write_json_source(std::ostream& output, const SymbolSource& source) {
+    output << "{\"spelling\": ";
+    write_json_source_extent(output, source.spelling);
+    output << ", \"expansion\": ";
+    if (source.expansion.has_value())
+        write_json_source_extent(output, *source.expansion);
+    else
+        output << "null";
+    output << '}';
 }
 
 std::map<std::string, std::vector<SymbolId>>
@@ -109,7 +160,8 @@ fully_unreachable_types(const Graph& graph, const ReachabilityResult& reachabili
                 return reachability.reachable[member];
             })) {
             std::ranges::sort(members, [&](SymbolId left, SymbolId right) {
-                return graph.symbols()[left].line < graph.symbols()[right].line;
+                return primary_source_extent(graph.symbols()[left]).location.line <
+                       primary_source_extent(graph.symbols()[right]).location.line;
             });
             result.emplace(name, std::move(members));
         }
@@ -149,11 +201,15 @@ AnalysisReport build_report(const Graph& graph, const ReachabilityResult& result
     std::ranges::sort(report.findings, [&](const Finding& left, const Finding& right) {
         const auto& lhs = graph.symbols()[left.symbol];
         const auto& rhs = graph.symbols()[right.symbol];
-        if (lhs.file != rhs.file)
-            return lhs.file.string() < rhs.file.string();
-        if (lhs.line != rhs.line)
-            return lhs.line < rhs.line;
-        return lhs.qualified_name < rhs.qualified_name;
+        const auto& lhs_location = primary_source_extent(lhs).location;
+        const auto& rhs_location = primary_source_extent(rhs).location;
+        if (lhs_location.file != rhs_location.file)
+            return lhs_location.file.string() < rhs_location.file.string();
+        if (lhs_location.line != rhs_location.line)
+            return lhs_location.line < rhs_location.line;
+        if (lhs.qualified_name != rhs.qualified_name)
+            return lhs.qualified_name < rhs.qualified_name;
+        return lhs.signature < rhs.signature;
     });
     return report;
 }
@@ -201,7 +257,7 @@ void write_human_report(std::ostream& output, const Graph& graph,
     output << "ROOTS\n";
     for (const auto& root : graph.roots()) {
         const auto& symbol = graph.symbols()[root.symbol];
-        output << "  " << symbol.qualified_name << " [" << to_string(root.kind) << "]\n"
+        output << "  " << display_symbol(symbol) << " [" << to_string(root.kind) << "]\n"
                << "    Scope:    " << to_string(symbol.scope) << '\n'
                << "    Evidence: " << root.evidence.provider << ": " << root.evidence.reason
                << '\n';
@@ -216,13 +272,15 @@ void write_human_report(std::ostream& output, const Graph& graph,
         for (const auto& [type, members] : dead_types) {
             output << "UNREACHABLE TYPE\n\n" << type << '\n';
             if (!members.empty())
-                output << "Location: " << location(graph.symbols()[members.front()]) << '\n';
+                output << "Location: "
+                       << location(primary_source_extent(graph.symbols()[members.front()]).location)
+                       << '\n';
             output << "Members:\n";
             for (const auto member : members) {
                 type_members.insert(member);
                 const auto& symbol = graph.symbols()[member];
                 const auto* finding = find_finding(report, member);
-                output << "  - " << symbol.qualified_name << " [" << to_string(symbol.kind) << "]";
+                output << "  - " << display_symbol(symbol) << " [" << to_string(symbol.kind) << "]";
                 if (finding != nullptr)
                     output << " " << to_string(finding->classification);
                 output << '\n';
@@ -245,9 +303,9 @@ void write_human_report(std::ostream& output, const Graph& graph,
                 const auto* finding = find_finding(report, id);
                 if (finding == nullptr)
                     continue;
-                output << symbol.qualified_name << '\n'
-                       << "  Location:       " << location(symbol) << '\n'
-                       << "  Kind:           " << to_string(symbol.kind) << '\n'
+                output << display_symbol(symbol) << '\n';
+                write_human_source(output, symbol, "  ");
+                output << "  Kind:           " << to_string(symbol.kind) << '\n'
                        << "  Classification: " << to_string(finding->classification) << '\n'
                        << "  Confidence:     " << std::fixed << std::setprecision(0)
                        << finding->confidence * 100.0 << "%\n"
@@ -279,7 +337,7 @@ void write_json_report(std::ostream& output, const Graph& graph,
     }
 
     output << "{\n"
-           << "  \"schema_version\": 3,\n"
+           << "  \"schema_version\": 4,\n"
            << "  \"mode\": \"application\",\n"
            << "  \"summary\": {\n"
            << "    \"defined_symbols\": " << report.defined_symbols << ",\n"
@@ -297,9 +355,13 @@ void write_json_report(std::ostream& output, const Graph& graph,
         const auto& symbol = graph.symbols()[root.symbol];
         output << (index == 0 ? "\n" : ",\n") << "    {\n"
                << "      \"symbol\": \"" << json::escape(symbol.qualified_name) << "\",\n"
+               << "      \"signature\": \"" << json::escape(symbol.signature) << "\",\n"
                << "      \"key\": \"" << json::escape(symbol.key) << "\",\n"
                << "      \"kind\": \"" << to_string(root.kind) << "\",\n"
                << "      \"scope\": \"" << to_string(symbol.scope) << "\",\n"
+               << "      \"source\": ";
+        write_json_source(output, symbol.source);
+        output << ",\n"
                << "      \"evidence\": {\n"
                << "        \"provider\": \"" << json::escape(root.evidence.provider) << "\",\n"
                << "        \"reason\": \"" << json::escape(root.evidence.reason) << "\"\n"
@@ -313,13 +375,18 @@ void write_json_report(std::ostream& output, const Graph& graph,
     for (std::size_t index = 0; index < report.findings.size(); ++index) {
         const auto& finding = report.findings[index];
         const auto& symbol = graph.symbols()[finding.symbol];
+        const auto& source = primary_source_extent(symbol).location;
         output << (index == 0 ? "\n" : ",\n") << "    {\n"
                << "      \"symbol\": \"" << json::escape(symbol.qualified_name) << "\",\n"
+               << "      \"signature\": \"" << json::escape(symbol.signature) << "\",\n"
                << "      \"key\": \"" << json::escape(symbol.key) << "\",\n"
                << "      \"kind\": \"" << to_string(symbol.kind) << "\",\n"
                << "      \"scope\": \"" << to_string(symbol.scope) << "\",\n"
-               << "      \"file\": \"" << json::escape(symbol.file.string()) << "\",\n"
-               << "      \"line\": " << symbol.line << ",\n"
+               << "      \"file\": \"" << json::escape(source.file.string()) << "\",\n"
+               << "      \"line\": " << source.line << ",\n"
+               << "      \"source\": ";
+        write_json_source(output, symbol.source);
+        output << ",\n"
                << "      \"classification\": \"" << to_string(finding.classification) << "\",\n"
                << "      \"confidence\": " << std::fixed << std::setprecision(2)
                << finding.confidence << ",\n"
@@ -338,8 +405,11 @@ void write_json_report(std::ostream& output, const Graph& graph,
                        << "\"";
             }
             if (item.from.has_value()) {
-                output << ",\n          \"from_symbol\": \""
-                       << json::escape(graph.symbols()[*item.from].qualified_name) << "\"";
+                const auto& from = graph.symbols()[*item.from];
+                output << ",\n          \"from_symbol\": \"" << json::escape(from.qualified_name)
+                       << "\",\n"
+                       << "          \"from_signature\": \"" << json::escape(from.signature)
+                       << "\"";
             }
             output << "\n        }";
         }

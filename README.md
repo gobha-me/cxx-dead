@@ -21,6 +21,7 @@ The prototype already handles:
 - structured root, graph-edge, escape, and classification evidence;
 - separate reachability and reporting scopes for framework-aware analysis;
 - human and versioned JSON output.
+- complete display signatures and exact spelling/expansion source extents.
 
 It does not yet reconstruct linker targets, infer library APIs, model arbitrary registration/plugin systems, analyze multiple build configurations, or scale efficiently to large standard-library-heavy projects. Findings are candidates for review, not deletion instructions.
 
@@ -162,8 +163,9 @@ The numeric confidence values in JSON are provisional presentation values, not s
 
 Every classification is backed by an ordered evidence chain. Root, edge, and escape facts retain a
 provider and human-readable reason, while analysis decisions use typed facts rather than matching
-those presentation strings. JSON schema version 3 exposes symbol scope counts and identifies the
-scope of roots and findings; version 2 introduced structured root and finding evidence.
+those presentation strings. JSON schema version 4 adds complete signatures and spelling/expansion
+locations and definition ranges while retaining the flat finding `file` and `line` fields. Version
+3 introduced symbol scope counts and root/finding scope; version 2 introduced structured evidence.
 
 ## Current analysis contract
 

@@ -37,7 +37,8 @@ command normalization ----> clang++ -ast-dump=json
 - `indexer` converts Clang AST JSON into declarations, provider-attributed calls,
   construction/destruction edges, address escapes, roots, record inheritance, and conservative
   override edges. It assigns reportable, indexed, external-opaque, or excluded scope from configured
-  path boundaries and materializes opaque references lazily.
+  path boundaries, reconstructs compressed Clang source locations from byte offsets, preserves
+  spelling and macro-expansion extents, and materializes opaque references lazily.
 - `graph` merges symbols, stores typed roots, edges, and escapes with structured evidence, traverses
   live edges, and computes unreachable SCCs.
 - `report` applies typed evidence classifications and writes terminal or schema-versioned JSON
@@ -85,6 +86,20 @@ another root remains.
 ## Identity
 
 External functions currently merge by mangled name. Internal-linkage symbols add the translation-unit path. This is adequate for the fixture but not the final identity design; see the design review for USR/configuration requirements.
+
+## Symbol source contract
+
+Each graph symbol retains its complete Clang `qualType` signature and a spelling source extent. A
+macro-produced definition additionally retains a separate expansion extent. Every point contains a
+normalized file, one-based line and column, zero-based byte offset, and token byte length. Definition
+ranges use Clang's inclusive begin/end-token convention; an end-exclusive byte position is therefore
+`end.offset + end.token_length`. For report ordering and the compatibility `file`/`line` JSON fields,
+the expansion extent is primary when present and spelling is primary otherwise.
+
+Clang omits repeated file and line fields in nested JSON nodes. The indexer resolves those omissions
+from traversal context and a cached per-file byte-offset line map rather than emitting line zero.
+JSON schema version 4 exposes the spelling extent and a nullable expansion extent on roots and
+findings, while terminal labels include signatures so overloads remain unambiguous.
 
 ## Failure model
 

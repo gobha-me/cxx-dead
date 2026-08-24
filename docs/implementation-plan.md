@@ -4,9 +4,10 @@ The roadmap is organized around risk retirement rather than feature count. Each 
 
 ## Milestone 0 — corpus and measurement
 
-Status: the initial 38-definition golden corpus, run-state contract, and reviewed result ledger were
-established for v0.1.1. Additional fixtures and fully enumerated real-project reviews remain ongoing
-as new frontend behavior is added.
+Status: the initial golden corpus, run-state contract, and reviewed result ledger were established
+for v0.1.1. The corpus now covers 39 definitions, including overload signatures, macro
+spelling/expansion extents, and a line-resolved lambda. Additional fixtures and fully enumerated
+real-project reviews remain ongoing as new frontend behavior is added.
 
 Goal: make precision measurable before expanding language coverage.
 
@@ -47,13 +48,12 @@ Acceptance checks:
 Remaining hardening tasks:
 
 1. Add full implicit-call fixture coverage, including member/base initialization and cleanup paths.
-2. Track spelling and expansion locations and exact definition ranges.
-3. Limit global-initializer roots to project-owned, linked definitions.
-4. Extend the structured evidence model with provider-composed dynamic edges and suppressions.
-5. Add weak-component/type/directory aggregation above SCCs.
-6. Replace provisional confidence numbers with configurable evidence policy.
-7. Add resource limits, cancellation, and structured incomplete-run diagnostics.
-8. Test command normalization with launchers, response files, modules, PCH, and compiler-specific flags.
+2. Limit global-initializer roots to project-owned, linked definitions.
+3. Extend the structured evidence model with provider-composed dynamic edges and suppressions.
+4. Add weak-component/type/directory aggregation above SCCs.
+5. Replace provisional confidence numbers with configurable evidence policy.
+6. Add resource limits, cancellation, and structured incomplete-run diagnostics.
+7. Test command normalization with launchers, response files, modules, PCH, and compiler-specific flags.
 
 ## Milestone 2 — scalable Clang frontend
 
@@ -156,11 +156,10 @@ Gate: reviewed reports identify abandoned components with materially less noise 
 
 For the next implementation cycle:
 
-1. Correct definition and macro source mapping.
-2. Add project-owned global initialization modeling.
-3. Add unreachable weak-component aggregation.
-4. Prototype a LibTooling fact collector and benchmark it against AST JSON.
-5. Define stable graph artifact and JSON schemas.
-6. Add CMake File API target ingestion.
+1. Add project-owned global initialization modeling.
+2. Add unreachable weak-component aggregation.
+3. Prototype a LibTooling fact collector and benchmark it against AST JSON.
+4. Define stable graph artifact and JSON schemas.
+5. Add CMake File API target ingestion.
 
 Do not start library inference or baseline CI policy until target identity and index completeness are reliable.

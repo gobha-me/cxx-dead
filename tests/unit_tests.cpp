@@ -88,6 +88,32 @@ void test_graph_algorithms() {
                 graph.symbols()[promoted].scope == cxx_dead::SymbolScope::Reportable,
             "merged symbol did not promote to its strongest scope");
 
+    const auto sourced = graph.add_or_merge_symbol(
+        {.key = "sourced", .scope = cxx_dead::SymbolScope::ExternalOpaque});
+    require(
+        graph.add_or_merge_symbol({
+            .key = "sourced",
+            .source = {.spelling =
+                           {
+                               .location = {.file = "definition.cpp", .line = 7, .column = 4},
+                               .begin = {.file = "definition.cpp", .line = 7, .column = 1},
+                               .end = {.file = "definition.cpp", .line = 9, .column = 2},
+                           }},
+            .scope = cxx_dead::SymbolScope::Indexed,
+            .defined = true,
+        }) == sourced &&
+            graph.add_or_merge_symbol({
+                .key = "sourced",
+                .source = {.spelling =
+                               {
+                                   .location = {.file = "declaration.cpp", .line = 22, .column = 4},
+                               }},
+                .scope = cxx_dead::SymbolScope::Reportable,
+            }) == sourced &&
+            graph.symbols()[sourced].scope == cxx_dead::SymbolScope::Reportable &&
+            cxx_dead::primary_source_extent(graph.symbols()[sourced]).location.line == 7U,
+        "merged symbol did not retain its complete definition extent while promoting scope");
+
     const auto result = cxx_dead::analyze_reachability(graph);
     require(result.reachable[root] && result.reachable[live], "direct calls should be traversed");
     require(!result.reachable[escaped], "address escapes must not imply a call");
@@ -188,8 +214,8 @@ void test_clang_integration() {
     const auto report_json = cxx_dead::json::parse(json_output.str());
     require(report_json.find("findings") != nullptr, "JSON report has no findings field");
     require(report_json.find("schema_version") != nullptr &&
-                report_json.find("schema_version")->as_number() == 3.0,
-            "JSON report does not use symbol-scope schema version 3");
+                report_json.find("schema_version")->as_number() == 4.0,
+            "JSON report does not use source-mapping schema version 4");
     require(report_json.find("roots") != nullptr && report_json.find("roots")->is_array(),
             "JSON report has no structured roots field");
 

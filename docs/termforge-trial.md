@@ -90,7 +90,9 @@ mapping can also be zero. These findings must not receive high-confidence policy
 
 Overloads such as the one-argument and two-argument `Terminal::select_driver` are distinguished by
 mangled key, but terminal/JSON symbol labels omit the signature. One overload may therefore be live
-while an identically displayed overload is reported. Reports should include signatures.
+while an identically displayed overload is reported. Version 0.4.0 addresses this presentation gap
+by adding complete signatures and precise spelling/expansion source extents to reports; callable
+reachability remains a separate modeling limitation.
 
 ## Interpretation of TermForge findings
 
@@ -111,7 +113,8 @@ remaining extraction gaps prevent treating internal findings as deletion evidenc
 ## Recommended next work from the trial
 
 1. Model `make_unique`/`make_shared` construction and callable escape/invocation.
-2. Add signatures and reliable lambda locations to findings.
+2. Rerun TermForge with signature-aware, precise source findings and review the remaining callable
+   cases.
 3. Separate graph scope from report scope so a library can participate in reachability while only an
    executable directory is reported.
 4. Add conservative library rooting and rerun TermForge to isolate genuinely unreachable internal

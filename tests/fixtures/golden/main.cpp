@@ -97,6 +97,8 @@ int initialized_value = initialize_global();
 DEFINE_FUNCTION(macro_live)
 DEFINE_FUNCTION(macro_dead)
 
+auto unused_lambda = [](int value) { return value + 1; };
+
 int main() {
     overloads::run();
     alpha::same_name();

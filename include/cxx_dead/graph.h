@@ -50,15 +50,32 @@ struct Evidence {
     bool operator==(const Evidence&) const = default;
 };
 
+struct SourcePoint {
+    std::filesystem::path file;
+    std::size_t line{0};
+    std::size_t column{0};
+    std::size_t offset{0};
+    std::size_t token_length{0};
+};
+
+struct SourceExtent {
+    SourcePoint location;
+    SourcePoint begin;
+    SourcePoint end;
+};
+
+struct SymbolSource {
+    SourceExtent spelling;
+    std::optional<SourceExtent> expansion;
+};
+
 struct Symbol {
     std::string key;
     std::string name;
     std::string qualified_name;
     std::string class_name;
     std::string signature;
-    std::filesystem::path file;
-    std::size_t line{0};
-    std::size_t end_line{0};
+    SymbolSource source;
     SymbolKind kind{SymbolKind::Function};
     SymbolScope scope{SymbolScope::ExternalOpaque};
     bool defined{false};
@@ -127,6 +144,7 @@ struct ReachabilityResult {
 [[nodiscard]] bool is_traversable(EdgeKind kind);
 [[nodiscard]] bool has_indexed_body(SymbolScope scope);
 [[nodiscard]] bool is_reportable(SymbolScope scope);
+[[nodiscard]] const SourceExtent& primary_source_extent(const Symbol& symbol);
 [[nodiscard]] ReachabilityResult analyze_reachability(const Graph& graph);
 [[nodiscard]] std::string_view to_string(SymbolKind kind);
 [[nodiscard]] std::string_view to_string(SymbolScope scope);

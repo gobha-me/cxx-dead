@@ -641,6 +641,7 @@ IndexResult ClangAstIndexer::index(const std::vector<CompileCommand>& commands) 
             result.diagnostics.push_back(command.file.string() + ":\n" +
                                          concise_diagnostic(process.standard_error));
         }
+        result.ast_bytes += process.standard_output.size();
 
         std::vector<Value> ast_documents;
         try {

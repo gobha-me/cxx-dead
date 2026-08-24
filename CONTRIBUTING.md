@@ -29,6 +29,9 @@ ctest --test-dir build --output-on-failure
 Please add or update a golden fixture for analysis behavior changes. A bug fix should demonstrate
 the incorrect behavior before the fix and the intended result afterward.
 
+Golden expectations assert reachability, classification, and evidence directly. Update the result
+ledger when a change materially affects finding counts or indexing measurements.
+
 ## Pull requests
 
 Keep changes focused and explain their effect on false positives, false negatives, runtime, and

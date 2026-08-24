@@ -163,6 +163,8 @@ construction performed inside library templates require explicit modeling.
   finding interpretation.
 - [Null Vector field trial](docs/null-vector-trial.md) covers dependency scoping, source mapping,
   namespace aliases, and framework callback limitations.
+- [Result ledger](docs/result-ledger.md) records reviewed corpus outcomes, resource measurements,
+  and the completeness of each measurement.
 - [Roadmap](ROADMAP.md) defines the maintained milestones and their acceptance gates.
 
 ## Prototype fixture

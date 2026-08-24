@@ -12,12 +12,13 @@ The prototype already handles:
 - methods, constructors, and destructors;
 - constructor/destructor effects for base classes;
 - conservative virtual dispatch across known class hierarchies;
-- address-taken functions as uncertain dynamic references;
+- address-taken functions as provider-attributed escape evidence;
 - `main()`, global-initializer calls, and manual roots;
 - an experimental Clang declaration-name filter for namespace-scoped trials;
 - unreachable cycles using Tarjan's SCC algorithm;
 - aggregation when every defined member of a type is unreachable;
 - internal-linkage confidence evidence;
+- structured root, graph-edge, escape, and classification evidence;
 - human and versioned JSON output.
 
 It does not yet reconstruct linker targets, infer library APIs, model arbitrary registration/plugin systems, analyze multiple build configurations, or scale efficiently to large standard-library-heavy projects. Findings are candidates for review, not deletion instructions.
@@ -143,6 +144,11 @@ The prototype assigns one of these evidence-based classifications:
 - `dynamically_referenced`: unreachable by call edges, but its address is taken.
 
 The numeric confidence values in JSON are provisional presentation values, not statistically calibrated probabilities. CI should initially filter by classification rather than treating them as measured likelihoods.
+
+Every classification is backed by an ordered evidence chain. Root, edge, and escape facts retain a
+provider and human-readable reason, while analysis decisions use typed facts rather than matching
+those presentation strings. JSON schema version 2 exposes roots and finding evidence explicitly;
+it replaces the version 1 finding-level `reason` and `address_taken` fields.
 
 ## Current analysis contract
 

@@ -26,10 +26,10 @@ translation units. `Graph symbols` includes declarations as well as reportable d
 
 | Run | Revision / environment | State | Reviewed findings | TP | FP | Known FN | Wall time | Peak RSS | AST bytes | Defined / graph symbols | Edges |
 | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Golden application corpus | v0.1.1 candidate; Clang 20.1.8; Linux x86-64 | complete | 17 / 17 | 17 | 0 | 0 | 89 ms | 4,788 KiB | 171,480 | 38 / 39 | 23 |
+| Golden application corpus | v0.2.0 candidate; Clang 20.1.8; Linux x86-64 | complete | 17 / 17 | 17 | 0 | 0 | 108 ms | 4,928 KiB | 171,431 | 38 / 39 | 22 |
 | TermForge `forge-top` | v0.1.0-era corrected prototype; filtered Clang run | complete | 585 / 585 triaged by category | not individually enumerated | at least 2 named factory-construction cases plus callable cases | not measured | 69.96 s | approximately 3–3.5 GiB | not captured | 1,618 / not captured | not captured |
 | Null Vector application | v0.1.0-era corrected prototype; 9 selected TUs | complete | 44 / 44 triaged by category | not individually enumerated | at least 5 framework callbacks plus their live cascade | not measured | 145.4 s | approximately 3.6 GiB | not captured | 123 / not captured | not captured |
-| Invalid golden translation unit | v0.1.1 candidate; Clang 20.1.8; Linux x86-64 | incomplete | 0 | 0 | 0 | 0 | not benchmarked | not benchmarked | 0 accepted | 0 committed | 0 committed |
+| Invalid golden translation unit | v0.2.0 candidate; Clang 20.1.8; Linux x86-64 | incomplete | 0 | 0 | 0 | 0 | not benchmarked | not benchmarked | 0 accepted | 0 committed | 0 committed |
 
 The historical field trials predate AST-byte and edge counters. Their missing measurements remain
 explicit rather than reconstructed from a different revision. Future reruns should populate every
@@ -47,10 +47,11 @@ table-driven expectations cover both live and unreachable outcomes for:
 - global initialization, macro-defined functions, generated sources, and excluded generated paths;
 - merged external-linkage header definitions and fail-closed invalid translation units.
 
-Every unreachable expectation asserts its classification and exact reason. Root and edge evidence is
-checked independently for `main`, global initialization, direct calls, construction, virtual
-dispatch, and address taking. The corpus run is therefore fully reviewed: all 17 findings are true
-positives, no live expectation is reported, and no deliberately unreachable expectation is missing.
+Every unreachable expectation asserts its classification and typed evidence chain. Root, edge, and
+escape evidence is checked independently for `main`, global initialization, direct calls,
+construction, virtual dispatch, and address taking. The corpus run is therefore fully reviewed: all
+17 findings are true positives, no live expectation is reported, and no deliberately unreachable
+expectation is missing.
 
 ## Reproduction
 

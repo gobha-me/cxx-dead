@@ -16,7 +16,6 @@ void merge_symbol(Symbol& target, Symbol source) {
     target.project_owned = target.project_owned || source.project_owned;
     target.internal_linkage = target.internal_linkage || source.internal_linkage;
     target.is_virtual = target.is_virtual || source.is_virtual;
-    target.address_taken = target.address_taken || source.address_taken;
     if ((target.file.empty() || (!target_was_project_owned && source.project_owned) ||
          (!target_was_defined && source.defined)) &&
         !source.file.empty()) {
@@ -48,23 +47,37 @@ SymbolId Graph::add_or_merge_symbol(Symbol symbol) {
     return id;
 }
 
-void Graph::add_edge(SymbolId from, SymbolId to, EdgeKind kind) {
+void Graph::add_edge(SymbolId from, SymbolId to, EdgeKind kind, Evidence evidence) {
     if (from >= symbols_.size() || to >= symbols_.size()) {
         throw std::out_of_range("graph edge references an invalid symbol");
     }
-    const auto duplicate = std::ranges::any_of(edges_, [=](const Edge& edge) {
-        return edge.from == from && edge.to == to && edge.kind == kind;
+    const auto duplicate = std::ranges::any_of(edges_, [&](const Edge& edge) {
+        return edge.from == from && edge.to == to && edge.kind == kind && edge.evidence == evidence;
     });
     if (!duplicate)
-        edges_.push_back({from, to, kind});
+        edges_.push_back({from, to, kind, std::move(evidence)});
 }
 
-void Graph::add_root(SymbolId id, std::string reason) {
+void Graph::add_root(SymbolId id, RootKind kind, Evidence evidence) {
     if (id >= symbols_.size())
         throw std::out_of_range("invalid graph root");
-    auto& reasons = roots_[id];
-    if (std::ranges::find(reasons, reason) == reasons.end())
-        reasons.push_back(std::move(reason));
+    const auto duplicate = std::ranges::any_of(roots_, [&](const Root& root) {
+        return root.symbol == id && root.kind == kind && root.evidence == evidence;
+    });
+    if (!duplicate)
+        roots_.push_back({id, kind, std::move(evidence)});
+}
+
+void Graph::add_escape(SymbolId id, EscapeKind kind, Evidence evidence,
+                       std::optional<SymbolId> from) {
+    if (id >= symbols_.size() || (from.has_value() && *from >= symbols_.size()))
+        throw std::out_of_range("graph escape references an invalid symbol");
+    const auto duplicate = std::ranges::any_of(escapes_, [&](const Escape& escape) {
+        return escape.symbol == id && escape.from == from && escape.kind == kind &&
+               escape.evidence == evidence;
+    });
+    if (!duplicate)
+        escapes_.push_back({id, from, kind, std::move(evidence)});
 }
 
 std::optional<SymbolId> Graph::find_by_key(std::string_view key) const {
@@ -91,11 +104,10 @@ ReachabilityResult analyze_reachability(const Graph& graph) {
     result.reachable.assign(count, false);
     std::vector<SymbolId> stack;
     stack.reserve(graph.roots().size());
-    for (const auto& [root, reasons] : graph.roots()) {
-        static_cast<void>(reasons);
-        if (!result.reachable[root]) {
-            result.reachable[root] = true;
-            stack.push_back(root);
+    for (const auto& root : graph.roots()) {
+        if (!result.reachable[root.symbol]) {
+            result.reachable[root.symbol] = true;
+            stack.push_back(root.symbol);
         }
     }
     while (!stack.empty()) {
@@ -193,7 +205,25 @@ std::string_view to_string(EdgeKind kind) {
         return "constructs";
     case EdgeKind::VirtualDispatch:
         return "virtual_dispatch";
-    case EdgeKind::AddressTaken:
+    }
+    return "unknown";
+}
+
+std::string_view to_string(RootKind kind) {
+    switch (kind) {
+    case RootKind::ApplicationEntryPoint:
+        return "application_entry_point";
+    case RootKind::GlobalInitializer:
+        return "global_initializer";
+    case RootKind::Manual:
+        return "manual";
+    }
+    return "unknown";
+}
+
+std::string_view to_string(EscapeKind kind) {
+    switch (kind) {
+    case EscapeKind::AddressTaken:
         return "address_taken";
     }
     return "unknown";

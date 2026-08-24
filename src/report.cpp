@@ -12,26 +12,77 @@ namespace cxx_dead {
 
 namespace {
 
-Finding classify(SymbolId id, const Symbol& symbol) {
-    Finding finding{.symbol = id, .classification = {}, .confidence = 0.0, .reason = {}};
-    if (symbol.address_taken) {
-        finding.classification = "dynamically_referenced";
+Finding classify(const Graph& graph, SymbolId id, const Symbol& symbol) {
+    Finding finding{
+        .symbol = id,
+        .classification = Classification::LikelyDead,
+        .confidence = 0.95,
+        .evidence = {{
+            .kind = FindingEvidenceKind::NoReachablePath,
+            .evidence = {.provider = "reachability_analysis",
+                         .reason = "no path from an application root"},
+            .escape_kind = std::nullopt,
+            .from = std::nullopt,
+        }},
+    };
+
+    bool escaped = false;
+    for (const auto& escape : graph.escapes()) {
+        if (escape.symbol != id)
+            continue;
+        escaped = true;
+        finding.evidence.push_back({
+            .kind = FindingEvidenceKind::Escape,
+            .evidence = escape.evidence,
+            .escape_kind = escape.kind,
+            .from = escape.from,
+        });
+    }
+
+    if (escaped) {
+        finding.classification = Classification::DynamicallyReferenced;
         finding.confidence = 0.40;
-        finding.reason = "no reachable path; function address is taken";
     } else if (symbol.is_virtual) {
-        finding.classification = "possibly_dead";
+        finding.classification = Classification::PossiblyDead;
         finding.confidence = 0.65;
-        finding.reason = "no reachable path; virtual dispatch requires conservative review";
+        finding.evidence.push_back({
+            .kind = FindingEvidenceKind::VirtualDispatchUncertainty,
+            .evidence = {.provider = "classification_policy",
+                         .reason = "virtual dispatch requires conservative review"},
+            .escape_kind = std::nullopt,
+            .from = std::nullopt,
+        });
     } else if (symbol.internal_linkage) {
-        finding.classification = "dead";
+        finding.classification = Classification::Dead;
         finding.confidence = 0.99;
-        finding.reason = "no path from an application root and symbol has internal linkage";
-    } else {
-        finding.classification = "likely_dead";
-        finding.confidence = 0.95;
-        finding.reason = "no path from an application root";
+        finding.evidence.push_back({
+            .kind = FindingEvidenceKind::InternalLinkage,
+            .evidence = {.provider = "classification_policy",
+                         .reason = "symbol has internal linkage"},
+            .escape_kind = std::nullopt,
+            .from = std::nullopt,
+        });
     }
     return finding;
+}
+
+const Finding* find_finding(const AnalysisReport& report, SymbolId symbol) {
+    const auto found = std::ranges::find_if(
+        report.findings, [=](const Finding& finding) { return finding.symbol == symbol; });
+    return found == report.findings.end() ? nullptr : &*found;
+}
+
+void write_human_evidence(std::ostream& output, const Graph& graph,
+                          const std::vector<FindingEvidence>& evidence, std::string_view indent) {
+    for (const auto& item : evidence) {
+        output << indent << "- [" << to_string(item.kind) << "] " << item.evidence.provider << ": "
+               << item.evidence.reason;
+        if (item.escape_kind.has_value())
+            output << " (" << to_string(*item.escape_kind) << ')';
+        if (item.from.has_value())
+            output << " from " << graph.symbols()[*item.from].qualified_name;
+        output << '\n';
+    }
 }
 
 std::string location(const Symbol& symbol) {
@@ -79,7 +130,7 @@ AnalysisReport build_report(const Graph& graph, const ReachabilityResult& result
             ++report.reachable_symbols;
         } else {
             ++report.unreachable_symbols;
-            report.findings.push_back(classify(id, symbol));
+            report.findings.push_back(classify(graph, id, symbol));
         }
     }
     std::ranges::sort(report.findings, [&](const Finding& left, const Finding& right) {
@@ -94,6 +145,34 @@ AnalysisReport build_report(const Graph& graph, const ReachabilityResult& result
     return report;
 }
 
+std::string_view to_string(Classification classification) {
+    switch (classification) {
+    case Classification::Dead:
+        return "dead";
+    case Classification::LikelyDead:
+        return "likely_dead";
+    case Classification::PossiblyDead:
+        return "possibly_dead";
+    case Classification::DynamicallyReferenced:
+        return "dynamically_referenced";
+    }
+    return "unknown";
+}
+
+std::string_view to_string(FindingEvidenceKind kind) {
+    switch (kind) {
+    case FindingEvidenceKind::NoReachablePath:
+        return "no_reachable_path";
+    case FindingEvidenceKind::InternalLinkage:
+        return "internal_linkage";
+    case FindingEvidenceKind::VirtualDispatchUncertainty:
+        return "virtual_dispatch_uncertainty";
+    case FindingEvidenceKind::Escape:
+        return "escape";
+    }
+    return "unknown";
+}
+
 void write_human_report(std::ostream& output, const Graph& graph,
                         const ReachabilityResult& reachability, const AnalysisReport& report,
                         const std::vector<std::string>& diagnostics) {
@@ -102,6 +181,15 @@ void write_human_report(std::ostream& output, const Graph& graph,
            << "  Defined project functions: " << report.defined_symbols << '\n'
            << "  Reachable:                 " << report.reachable_symbols << '\n'
            << "  Unreachable candidates:    " << report.unreachable_symbols << "\n\n";
+
+    output << "ROOTS\n";
+    for (const auto& root : graph.roots()) {
+        const auto& symbol = graph.symbols()[root.symbol];
+        output << "  " << symbol.qualified_name << " [" << to_string(root.kind) << "]\n"
+               << "    Evidence: " << root.evidence.provider << ": " << root.evidence.reason
+               << '\n';
+    }
+    output << '\n';
 
     if (report.findings.empty()) {
         output << "No unreachable function definitions found.\n";
@@ -116,10 +204,15 @@ void write_human_report(std::ostream& output, const Graph& graph,
             for (const auto member : members) {
                 type_members.insert(member);
                 const auto& symbol = graph.symbols()[member];
-                output << "  - " << symbol.qualified_name << " [" << to_string(symbol.kind)
-                       << "]\n";
+                const auto* finding = find_finding(report, member);
+                output << "  - " << symbol.qualified_name << " [" << to_string(symbol.kind) << "]";
+                if (finding != nullptr)
+                    output << " " << to_string(finding->classification);
+                output << '\n';
+                if (finding != nullptr)
+                    write_human_evidence(output, graph, finding->evidence, "      ");
             }
-            output << "Reason: no member definition is reachable from an application root.\n\n";
+            output << '\n';
         }
 
         for (const auto& component : reachability.unreachable_sccs) {
@@ -132,14 +225,17 @@ void write_human_report(std::ostream& output, const Graph& graph,
                                            : "UNREACHABLE SYMBOL\n\n");
             for (const auto id : visible) {
                 const auto& symbol = graph.symbols()[id];
-                const auto finding = classify(id, symbol);
+                const auto* finding = find_finding(report, id);
+                if (finding == nullptr)
+                    continue;
                 output << symbol.qualified_name << '\n'
                        << "  Location:       " << location(symbol) << '\n'
                        << "  Kind:           " << to_string(symbol.kind) << '\n'
-                       << "  Classification: " << finding.classification << '\n'
+                       << "  Classification: " << to_string(finding->classification) << '\n'
                        << "  Confidence:     " << std::fixed << std::setprecision(0)
-                       << finding.confidence * 100.0 << "%\n"
-                       << "  Reason:         " << finding.reason << '\n';
+                       << finding->confidence * 100.0 << "%\n"
+                       << "  Evidence:\n";
+                write_human_evidence(output, graph, finding->evidence, "    ");
             }
             if (visible.size() > 1U) {
                 output << "  SCC size:       " << visible.size() << " mutually reachable symbols\n";
@@ -166,13 +262,30 @@ void write_json_report(std::ostream& output, const Graph& graph,
     }
 
     output << "{\n"
-           << "  \"schema_version\": 1,\n"
+           << "  \"schema_version\": 2,\n"
            << "  \"mode\": \"application\",\n"
            << "  \"summary\": {\n"
            << "    \"defined_symbols\": " << report.defined_symbols << ",\n"
            << "    \"reachable_symbols\": " << report.reachable_symbols << ",\n"
            << "    \"unreachable_symbols\": " << report.unreachable_symbols << "\n"
            << "  },\n"
+           << "  \"roots\": [";
+    for (std::size_t index = 0; index < graph.roots().size(); ++index) {
+        const auto& root = graph.roots()[index];
+        const auto& symbol = graph.symbols()[root.symbol];
+        output << (index == 0 ? "\n" : ",\n") << "    {\n"
+               << "      \"symbol\": \"" << json::escape(symbol.qualified_name) << "\",\n"
+               << "      \"key\": \"" << json::escape(symbol.key) << "\",\n"
+               << "      \"kind\": \"" << to_string(root.kind) << "\",\n"
+               << "      \"evidence\": {\n"
+               << "        \"provider\": \"" << json::escape(root.evidence.provider) << "\",\n"
+               << "        \"reason\": \"" << json::escape(root.evidence.reason) << "\"\n"
+               << "      }\n"
+               << "    }";
+    }
+    if (!graph.roots().empty())
+        output << '\n';
+    output << "  ],\n"
            << "  \"findings\": [";
     for (std::size_t index = 0; index < report.findings.size(); ++index) {
         const auto& finding = report.findings[index];
@@ -183,12 +296,32 @@ void write_json_report(std::ostream& output, const Graph& graph,
                << "      \"kind\": \"" << to_string(symbol.kind) << "\",\n"
                << "      \"file\": \"" << json::escape(symbol.file.string()) << "\",\n"
                << "      \"line\": " << symbol.line << ",\n"
-               << "      \"classification\": \"" << finding.classification << "\",\n"
+               << "      \"classification\": \"" << to_string(finding.classification) << "\",\n"
                << "      \"confidence\": " << std::fixed << std::setprecision(2)
                << finding.confidence << ",\n"
                << "      \"component\": " << component_by_symbol[finding.symbol] << ",\n"
-               << "      \"reason\": \"" << json::escape(finding.reason) << "\",\n"
-               << "      \"address_taken\": " << (symbol.address_taken ? "true" : "false") << "\n"
+               << "      \"evidence\": [";
+        for (std::size_t evidence_index = 0; evidence_index < finding.evidence.size();
+             ++evidence_index) {
+            const auto& item = finding.evidence[evidence_index];
+            output << (evidence_index == 0 ? "\n" : ",\n") << "        {\n"
+                   << "          \"kind\": \"" << to_string(item.kind) << "\",\n"
+                   << "          \"provider\": \"" << json::escape(item.evidence.provider)
+                   << "\",\n"
+                   << "          \"reason\": \"" << json::escape(item.evidence.reason) << "\"";
+            if (item.escape_kind.has_value()) {
+                output << ",\n          \"escape_kind\": \"" << to_string(*item.escape_kind)
+                       << "\"";
+            }
+            if (item.from.has_value()) {
+                output << ",\n          \"from_symbol\": \""
+                       << json::escape(graph.symbols()[*item.from].qualified_name) << "\"";
+            }
+            output << "\n        }";
+        }
+        if (!finding.evidence.empty())
+            output << '\n';
+        output << "      ]\n"
                << "    }";
     }
     if (!report.findings.empty())

@@ -34,9 +34,13 @@ command normalization ----> clang++ -ast-dump=json
 
 - `compile_database` parses both `arguments` and shell-quoted `command` entries.
 - `process` runs Clang directly with `fork`/`execvp`, captures stdout/stderr concurrently, and never evaluates compile commands through a shell.
-- `indexer` converts Clang AST JSON into declarations, calls, construction/destruction edges, address escapes, roots, record inheritance, and conservative override edges.
-- `graph` merges symbols, stores typed edges, traverses live edges, and computes unreachable SCCs.
-- `report` applies provisional evidence classifications and writes terminal or JSON output.
+- `indexer` converts Clang AST JSON into declarations, provider-attributed calls,
+  construction/destruction edges, address escapes, roots, record inheritance, and conservative
+  override edges.
+- `graph` merges symbols, stores typed roots, edges, and escapes with structured evidence, traverses
+  live edges, and computes unreachable SCCs.
+- `report` applies typed evidence classifications and writes terminal or schema-versioned JSON
+  evidence chains.
 - `json` is a small standards-oriented parser/escaper used for both Clang and compilation database input, avoiding a prototype package dependency.
 
 The graph module has no Clang dependency. A scalable frontend can replace `ClangAstIndexer` while retaining analysis and reporting tests.
@@ -49,7 +53,7 @@ Traversed edges:
 - `Constructs`
 - `VirtualDispatch`
 
-Non-traversed evidence edges:
+Non-traversed escape facts:
 
 - `AddressTaken`
 
@@ -58,6 +62,10 @@ Current roots:
 - a defined function named `main`;
 - targets called by detected namespace-scope initializers;
 - exact qualified or mangled names passed with `--root`.
+
+Each root records its typed kind, provider, and reason. Traversable edges retain equivalent provider
+evidence, while address-taking is stored separately as an escape fact with its originating symbol
+when known. Classification uses these enums and relationships; reasons are presentation metadata.
 
 An experimental `--ast-filter` passes Clang's declaration-name filter through to the AST dumper.
 Filtered output can contain multiple consecutive JSON documents; the indexer splits and merges them

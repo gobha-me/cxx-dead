@@ -26,6 +26,8 @@ translation units. `Graph symbols` includes declarations as well as reportable d
 
 | Run | Revision / environment | State | Reviewed findings | TP | FP | Known FN | Wall time | Peak RSS | AST bytes | Defined / graph symbols | Edges |
 | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Golden application corpus | v0.4.0 candidate; Clang 20.1.8; Linux x86-64 | complete | 18 / 18 | 18 | 0 | 0 | 70 ms | 5,080 KiB | 202,187 | 39 / 40 | 22 |
+| Scope-separation fixture | v0.4.0 candidate; Clang 20.1.8; Linux x86-64 | complete | 1 / 1 | 1 | 0 | 0 | 37 ms | 4,676 KiB | 104,266 | 4 / 9 | 6 |
 | Golden application corpus | v0.3.0 candidate; Clang 20.1.8; Linux x86-64 | complete | 17 / 17 | 17 | 0 | 0 | 69 ms | 4,960 KiB | 171,431 | 38 / 39 | 22 |
 | Scope-separation fixture | v0.3.0 candidate; Clang 20.1.8; Linux x86-64 | complete | 1 / 1 | 1 | 0 | 0 | 52 ms | 4,536 KiB | 104,266 | 4 / 9 | 6 |
 | TermForge `forge-top` | v0.1.0-era corrected prototype; filtered Clang run | complete | 585 / 585 triaged by category | not individually enumerated | at least 2 named factory-construction cases plus callable cases | not measured | 69.96 s | approximately 3–3.5 GiB | not captured | 1,618 / not captured | not captured |
@@ -38,20 +40,21 @@ column and retain the old row when the frontend or run configuration changes.
 
 ## Golden review coverage
 
-The three-translation-unit corpus contains 38 project definitions and 39 graph symbols. Its 38
+The three-translation-unit corpus contains 39 project definitions and 40 graph symbols. Its 39
 table-driven expectations cover both live and unreachable outcomes for:
 
 - direct and cross-translation-unit calls, overloads, namespaces, external and internal linkage;
 - constructors, destructors, base/member initialization, virtual dispatch, and unused overrides;
 - directly called, address-escaped, and unused callbacks;
 - used and unused template specializations;
-- global initialization, macro-defined functions, generated sources, and excluded generated paths;
+- global initialization, macro-defined functions, exact spelling/expansion ranges, a line-resolved
+  lambda, generated sources, and excluded generated paths;
 - merged external-linkage header definitions and fail-closed invalid translation units.
 
 Every unreachable expectation asserts its classification and typed evidence chain. Root, edge, and
 escape evidence is checked independently for `main`, global initialization, direct calls,
 construction, virtual dispatch, and address taking. The corpus run is therefore fully reviewed: all
-17 findings are true positives, no live expectation is reported, and no deliberately unreachable
+18 findings are true positives, no live expectation is reported, and no deliberately unreachable
 expectation is missing.
 
 The scope-separation fixture indexes a framework implementation without making its four symbols

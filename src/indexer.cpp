@@ -5,7 +5,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <fstream>
 #include <functional>
+#include <iterator>
 #include <optional>
 #include <ranges>
 #include <set>
@@ -33,6 +35,7 @@ struct TranslationUnitState {
     std::unordered_map<std::string, SymbolId> declarations;
     std::unordered_map<std::string, Symbol> opaque_declarations;
     std::unordered_map<std::string, RecordInfo>& records;
+    std::unordered_map<std::string, std::vector<std::size_t>> line_offsets;
 };
 
 bool is_function_kind(std::string_view kind) {
@@ -125,27 +128,113 @@ std::size_t numeric_field(const Value* object, std::string_view key) {
     return static_cast<std::size_t>(value->as_number());
 }
 
-std::size_t node_line(const Value& node) {
-    if (const auto* location = physical_location(node.find("loc")); location != nullptr) {
-        if (const auto line = numeric_field(location, "line"); line != 0)
-            return line;
+const Value* location_variant(const Value* location, std::string_view variant) {
+    if (location == nullptr || !location->is_object())
+        return nullptr;
+    if (const auto* nested = location->find(variant); nested != nullptr && nested->is_object())
+        return nested;
+    if (location->find("spellingLoc") == nullptr && location->find("expansionLoc") == nullptr &&
+        variant == "spellingLoc") {
+        return location;
     }
-    if (const auto* range = node.find("range"); range != nullptr) {
-        if (const auto* begin = physical_location(range->find("begin")); begin != nullptr) {
-            return numeric_field(begin, "line");
-        }
-    }
-    return 0;
+    return nullptr;
 }
 
-std::size_t node_end_line(const Value& node, std::size_t fallback) {
-    if (const auto* range = node.find("range"); range != nullptr) {
-        if (const auto* end = physical_location(range->find("end")); end != nullptr) {
-            if (const auto line = numeric_field(end, "line"); line != 0)
-                return line;
+std::vector<std::size_t>& source_line_offsets(TranslationUnitState& state,
+                                              const std::filesystem::path& file) {
+    auto [entry, inserted] = state.line_offsets.try_emplace(file.string());
+    if (!inserted)
+        return entry->second;
+    std::ifstream input(file, std::ios::binary);
+    if (!input)
+        return entry->second;
+    const std::string contents(std::istreambuf_iterator<char>(input), {});
+    entry->second.push_back(0);
+    for (std::size_t offset = 0; offset < contents.size(); ++offset) {
+        if (contents[offset] == '\n')
+            entry->second.push_back(offset + 1U);
+    }
+    return entry->second;
+}
+
+SourcePoint source_point(const Value* location, const std::filesystem::path& inherited_file,
+                         TranslationUnitState& state) {
+    SourcePoint point;
+    if (location == nullptr)
+        return point;
+    auto file = location->string_or("file");
+    if (!file.empty() && file.front() != '<')
+        point.file = absolute_normalized(file, state.command.directory);
+    else if (file.empty())
+        point.file = inherited_file;
+    point.line = numeric_field(location, "line");
+    point.column = numeric_field(location, "col");
+    point.offset = numeric_field(location, "offset");
+    point.token_length = numeric_field(location, "tokLen");
+
+    const auto* offset = location->find("offset");
+    const bool has_offset = offset != nullptr && offset->is_number();
+    if (!point.file.empty() && has_offset && (point.line == 0 || point.column == 0)) {
+        const auto& offsets = source_line_offsets(state, point.file);
+        if (!offsets.empty()) {
+            const auto upper = std::ranges::upper_bound(offsets, point.offset);
+            const auto line_index = static_cast<std::size_t>(std::distance(offsets.begin(), upper));
+            if (point.line == 0)
+                point.line = line_index;
+            if (point.column == 0 && line_index != 0)
+                point.column = point.offset - offsets[line_index - 1U] + 1U;
         }
     }
-    return fallback;
+    return point;
+}
+
+SourceExtent source_extent(const Value& node, std::string_view variant,
+                           const std::filesystem::path& inherited_file,
+                           TranslationUnitState& state) {
+    const auto* location = location_variant(node.find("loc"), variant);
+    const auto* range = node.find("range");
+    const auto* begin =
+        range != nullptr ? location_variant(range->find("begin"), variant) : nullptr;
+    const auto* end = range != nullptr ? location_variant(range->find("end"), variant) : nullptr;
+
+    SourceExtent extent;
+    extent.location = source_point(location, inherited_file, state);
+    const auto range_file = !extent.location.file.empty() ? extent.location.file : inherited_file;
+    extent.begin = source_point(begin, range_file, state);
+    const auto end_file = !extent.begin.file.empty() ? extent.begin.file : range_file;
+    extent.end = source_point(end, end_file, state);
+    if (extent.location.file.empty())
+        extent.location = extent.begin;
+    if (extent.begin.file.empty())
+        extent.begin = extent.location;
+    if (extent.end.file.empty())
+        extent.end = extent.begin;
+    return extent;
+}
+
+bool has_expansion_location(const Value& node) {
+    if (const auto* location = node.find("loc");
+        location != nullptr && location->find("expansionLoc") != nullptr) {
+        return true;
+    }
+    if (const auto* range = node.find("range"); range != nullptr) {
+        return (range->find("begin") != nullptr &&
+                range->find("begin")->find("expansionLoc") != nullptr) ||
+               (range->find("end") != nullptr &&
+                range->find("end")->find("expansionLoc") != nullptr);
+    }
+    return false;
+}
+
+SymbolSource symbol_source(const Value& node, const std::filesystem::path& inherited_file,
+                           TranslationUnitState& state) {
+    SymbolSource source{
+        .spelling = source_extent(node, "spellingLoc", inherited_file, state),
+        .expansion = std::nullopt,
+    };
+    if (has_expansion_location(node))
+        source.expansion = source_extent(node, "expansionLoc", inherited_file, state);
+    return source;
 }
 
 bool path_is_within(const std::filesystem::path& child, const std::filesystem::path& parent) {
@@ -308,16 +397,13 @@ void collect_declarations(const Value& node, TranslationUnitState& state, std::s
             key += "@" + state.command.file.string();
         const auto scope_kind = symbol_scope(state, file);
         if (!ast_id.empty() && !key.empty() && scope_kind != SymbolScope::Excluded) {
-            const auto line = node_line(node);
             Symbol symbol{
                 .key = std::move(key),
                 .name = name,
                 .qualified_name = qualified,
                 .class_name = symbol_kind(kind) == SymbolKind::Function ? "" : owner_scope,
                 .signature = type_string(node),
-                .file = file,
-                .line = line,
-                .end_line = node_end_line(node, line),
+                .source = symbol_source(node, file, state),
                 .kind = symbol_kind(kind),
                 .scope = scope_kind,
                 // A FunctionDecl nested in a FunctionTemplateDecl describes the pattern and has no
@@ -708,7 +794,7 @@ IndexResult ClangAstIndexer::index(const std::vector<CompileCommand>& commands) 
             throw std::runtime_error("invalid Clang AST JSON for " + command.file.string() + ": " +
                                      error.what());
         }
-        TranslationUnitState state{command, options_, result.graph, {}, {}, {}, records};
+        TranslationUnitState state{command, options_, result.graph, {}, {}, {}, records, {}};
         for (const auto& ast : ast_documents)
             collect_contexts(ast, state, "", command.file);
         for (const auto& ast : ast_documents)

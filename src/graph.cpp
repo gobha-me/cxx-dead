@@ -31,12 +31,13 @@ void merge_symbol(Symbol& target, Symbol source) {
         target.scope = source.scope;
     target.internal_linkage = target.internal_linkage || source.internal_linkage;
     target.is_virtual = target.is_virtual || source.is_virtual;
-    if ((target.file.empty() || (scope_rank(source.scope) > scope_rank(target_scope)) ||
-         (!target_was_defined && source.defined)) &&
-        !source.file.empty()) {
-        target.file = std::move(source.file);
-        target.line = source.line;
-        target.end_line = source.end_line;
+    const bool source_has_preferred_definition = !target_was_defined && source.defined;
+    const bool source_has_preferred_scope =
+        target_was_defined == source.defined && scope_rank(source.scope) > scope_rank(target_scope);
+    if ((primary_source_extent(target).location.file.empty() || source_has_preferred_definition ||
+         source_has_preferred_scope) &&
+        !primary_source_extent(source).location.file.empty()) {
+        target.source = std::move(source.source);
     }
     if (target.qualified_name.empty())
         target.qualified_name = std::move(source.qualified_name);
@@ -117,6 +118,10 @@ bool is_reportable(SymbolScope scope) {
     return scope == SymbolScope::Reportable;
 }
 
+const SourceExtent& primary_source_extent(const Symbol& symbol) {
+    return symbol.source.expansion.has_value() ? *symbol.source.expansion : symbol.source.spelling;
+}
+
 ReachabilityResult analyze_reachability(const Graph& graph) {
     const auto count = graph.symbols().size();
     std::vector<std::vector<SymbolId>> adjacency(count);
@@ -187,7 +192,11 @@ ReachabilityResult analyze_reachability(const Graph& graph) {
                     break;
             }
             std::ranges::sort(component, [&](SymbolId left, SymbolId right) {
-                return graph.symbols()[left].qualified_name < graph.symbols()[right].qualified_name;
+                const auto& lhs = graph.symbols()[left];
+                const auto& rhs = graph.symbols()[right];
+                if (lhs.qualified_name != rhs.qualified_name)
+                    return lhs.qualified_name < rhs.qualified_name;
+                return lhs.signature < rhs.signature;
             });
         }
     };
@@ -199,9 +208,11 @@ ReachabilityResult analyze_reachability(const Graph& graph) {
     std::ranges::sort(result.unreachable_sccs, [&](const auto& left, const auto& right) {
         const auto& lhs = graph.symbols()[left.front()];
         const auto& rhs = graph.symbols()[right.front()];
-        if (lhs.file != rhs.file)
-            return lhs.file.string() < rhs.file.string();
-        return lhs.line < rhs.line;
+        const auto& lhs_location = primary_source_extent(lhs).location;
+        const auto& rhs_location = primary_source_extent(rhs).location;
+        if (lhs_location.file != rhs_location.file)
+            return lhs_location.file.string() < rhs_location.file.string();
+        return lhs_location.line < rhs_location.line;
     });
     return result;
 }

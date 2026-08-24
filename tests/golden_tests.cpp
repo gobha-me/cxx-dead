@@ -107,7 +107,8 @@ void verify_expectation(const cxx_dead::Graph& graph,
             std::string(expected.qualified_name) + " has the wrong linkage evidence");
     require(symbol.scope == cxx_dead::SymbolScope::Reportable,
             std::string(expected.qualified_name) + " should be reportable");
-    require(!symbol.file.empty() && symbol.line != 0U,
+    const auto& source = cxx_dead::primary_source_extent(symbol).location;
+    require(!source.file.empty() && source.line != 0U && source.column != 0U,
             std::string(expected.qualified_name) + " should have a source location");
 
     const auto* finding = find_finding(report, id);
@@ -233,6 +234,7 @@ void test_golden_corpus() {
          cxx_dead::SymbolKind::Function},
         {"macro_live", "void ()", true, {}, {}, cxx_dead::SymbolKind::Function},
         {"macro_dead", "void ()", false, "likely_dead", {}, cxx_dead::SymbolKind::Function},
+        {"operator()", "int (int) const", false, "likely_dead", {}, cxx_dead::SymbolKind::Method},
         {"generated_live", "void ()", true, {}, {}, cxx_dead::SymbolKind::Function},
         {"generated_dead", "void ()", false, "likely_dead", {}, cxx_dead::SymbolKind::Function},
         {"HeaderApi::unused_static_member",
@@ -276,8 +278,8 @@ void test_golden_corpus() {
                                 indexed.diagnostics);
     const auto report_json = cxx_dead::json::parse(json_output.str());
     require(report_json.find("schema_version") != nullptr &&
-                report_json.find("schema_version")->as_number() == 3.0,
-            "golden JSON report should use schema version 3");
+                report_json.find("schema_version")->as_number() == 4.0,
+            "golden JSON report should use schema version 4");
     require(report_json.find("roots") != nullptr &&
                 report_json.find("roots")->as_array().size() >= 2U,
             "golden JSON report should expose structured root evidence");
@@ -290,13 +292,50 @@ void test_golden_corpus() {
                 escaped_json->find("reason") == nullptr &&
                 escaped_json->find("address_taken") == nullptr,
             "escaped callback JSON should retain its structured evidence chain");
+    const auto overload_json = std::ranges::find_if(findings_json, [](const auto& finding) {
+        return finding.string_or("symbol") == "overloads::select" &&
+               finding.string_or("signature") == "void (double)";
+    });
+    require(overload_json != findings_json.end() && overload_json->find("source") != nullptr &&
+                overload_json->find("source")->find("expansion")->is_null(),
+            "JSON should distinguish overloads and expose ordinary spelling source");
+    const auto macro_json = std::ranges::find_if(findings_json, [](const auto& finding) {
+        return finding.string_or("symbol") == "macro_dead";
+    });
+    require(macro_json != findings_json.end() && macro_json->find("source") != nullptr &&
+                !macro_json->find("source")->find("expansion")->is_null(),
+            "JSON should distinguish macro spelling and expansion extents");
+    const auto lambda_json = std::ranges::find_if(findings_json, [](const auto& finding) {
+        return finding.string_or("symbol") == "operator()" &&
+               finding.string_or("signature") == "int (int) const";
+    });
+    require(lambda_json != findings_json.end() && lambda_json->find("line")->as_number() == 100.0,
+            "lambda finding should retain its reconstructed source line");
+
+    std::ostringstream human_output;
+    cxx_dead::write_human_report(human_output, indexed.graph, reachability, report,
+                                 indexed.diagnostics);
+    require(human_output.str().contains("overloads::select : void (double)") &&
+                human_output.str().contains("operator() : int (int) const") &&
+                human_output.str().contains("Spelling:") &&
+                human_output.str().contains("Expansion:"),
+            "human report should distinguish signatures and macro source locations");
 
     const auto macro = indexed.graph.symbols()[find_symbol(indexed.graph, "macro_dead", "void ()")];
-    require(macro.file.filename() == "main.cpp", "macro expansion should map to its source file");
+    require(macro.source.expansion.has_value() &&
+                macro.source.spelling.location.file.filename() == "main.cpp" &&
+                macro.source.spelling.location.line == 98U &&
+                macro.source.spelling.location.column == 17U &&
+                macro.source.spelling.begin.line == 96U &&
+                macro.source.expansion->location.line == 98U &&
+                macro.source.expansion->location.column == 1U &&
+                macro.source.expansion->begin.offset != macro.source.spelling.begin.offset,
+            "macro should retain distinct spelling and expansion source extents");
     const auto generated =
         indexed.graph.symbols()[find_symbol(indexed.graph, "generated_dead", "void ()")];
-    require(generated.file.filename() == "generated.cpp" &&
-                generated.file.parent_path().filename() == "generated",
+    const auto& generated_location = cxx_dead::primary_source_extent(generated).location;
+    require(generated_location.file.filename() == "generated.cpp" &&
+                generated_location.file.parent_path().filename() == "generated",
             "generated source should retain its generated path");
     require(matching_symbols(indexed.graph, "HeaderApi::unused_static_member").size() == 1U,
             "external-linkage header definition should merge across translation units");

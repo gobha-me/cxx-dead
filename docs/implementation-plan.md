@@ -4,6 +4,10 @@ The roadmap is organized around risk retirement rather than feature count. Each 
 
 ## Milestone 0 — corpus and measurement
 
+Status: the initial 38-definition golden corpus, run-state contract, and reviewed result ledger were
+established for v0.1.1. Additional fixtures and fully enumerated real-project reviews remain ongoing
+as new frontend behavior is added.
+
 Goal: make precision measurable before expanding language coverage.
 
 Deliverables:
@@ -153,14 +157,13 @@ Gate: reviewed reports identify abandoned components with materially less noise 
 
 For the next implementation cycle:
 
-1. Expand golden language fixtures.
-2. Add structured root/evidence types.
-3. Split graph participation from report ownership.
-4. Correct definition and macro source mapping.
-5. Add project-owned global initialization modeling.
-6. Add unreachable weak-component aggregation.
-7. Prototype a LibTooling fact collector and benchmark it against AST JSON.
-8. Define stable graph artifact and JSON schemas.
-9. Add CMake File API target ingestion.
+1. Add structured root/evidence types.
+2. Split graph participation from report ownership.
+3. Correct definition and macro source mapping.
+4. Add project-owned global initialization modeling.
+5. Add unreachable weak-component aggregation.
+6. Prototype a LibTooling fact collector and benchmark it against AST JSON.
+7. Define stable graph artifact and JSON schemas.
+8. Add CMake File API target ingestion.
 
 Do not start library inference or baseline CI policy until target identity and index completeness are reliable.

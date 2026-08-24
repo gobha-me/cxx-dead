@@ -22,6 +22,7 @@ struct IndexResult {
     Graph graph;
     std::vector<std::string> diagnostics;
     std::size_t translation_units{0};
+    std::size_t ast_bytes{0};
 };
 
 class ClangAstIndexer {

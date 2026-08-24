@@ -1,0 +1,17 @@
+[
+  {
+    "directory": ".",
+    "file": "main.cpp",
+    "arguments": ["clang++", "-std=c++23", "-c", "main.cpp", "-o", "main.o"]
+  },
+  {
+    "directory": ".",
+    "file": "support.cpp",
+    "arguments": ["clang++", "-std=c++23", "-c", "support.cpp", "-o", "support.o"]
+  },
+  {
+    "directory": ".",
+    "file": "generated/generated.cpp",
+    "arguments": ["clang++", "-std=c++23", "-c", "generated/generated.cpp", "-o", "generated.o"]
+  }
+]

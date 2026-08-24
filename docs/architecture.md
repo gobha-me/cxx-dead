@@ -72,6 +72,24 @@ External functions currently merge by mangled name. Internal-linkage symbols add
 
 The index is all-or-nothing. A nonzero Clang result or malformed AST aborts analysis with exit status 1. This avoids presenting an incomplete graph as evidence of deadness.
 
+## Run states
+
+The prototype uses these run-state definitions even though successful JSON reports do not yet carry
+an explicit state field:
+
+- **complete**: every selected translation unit produced parseable AST facts and at least one
+  application root was found. Only a complete run may emit findings or return the policy status 2.
+- **incomplete**: a supported analysis started, but a required translation unit, AST document, or
+  root could not be indexed. The partial graph is discarded, no findings are emitted, and the
+  process returns status 1.
+- **unsupported**: the requested analysis context is not implemented, such as a mode other than
+  `application`. The request is rejected before a report is produced and returns status 1.
+
+An unsupported language or framework pattern inside an otherwise complete application run is an
+analysis limitation, not a different run state. Such findings remain advisory and the limitation
+must be recorded in the result ledger or a diagnostic until the frontend can model it
+conservatively. Structured run-state output and resource-limit behavior remain follow-up work.
+
 ## Security boundary
 
 Commands are passed as argument arrays, not shell strings. Output and dependency flags are removed before adding AST flags. As with normal builds, the compilation database is trusted input: response files, compiler plugins, and paths can still cause Clang to load repository-selected content.

@@ -1,0 +1,52 @@
+name: False-positive report
+description: Report a live symbol classified as unreachable
+title: "false positive: "
+labels: ["false-positive", "correctness", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: High-confidence false positives are the project's highest-priority defect class.
+  - type: input
+    id: revision
+    attributes:
+      label: cxx-dead revision and Clang version
+    validations:
+      required: true
+  - type: input
+    id: symbol
+    attributes:
+      label: Reported symbol
+    validations:
+      required: true
+  - type: dropdown
+    id: classification
+    attributes:
+      label: Classification
+      options:
+        - dead
+        - likely_dead
+        - possibly_dead
+        - dynamically_referenced
+    validations:
+      required: true
+  - type: textarea
+    id: live_path
+    attributes:
+      label: Why the symbol is live
+      description: Describe the entry point, call path, callback, registration, plugin, or external consumer.
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Analysis command and target configuration
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reduced reproduction and JSON finding
+      description: Remove private source, credentials, and sensitive flags before posting.
+    validations:
+      required: true

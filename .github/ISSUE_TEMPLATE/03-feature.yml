@@ -1,0 +1,31 @@
+name: Feature or modeling request
+description: Propose analysis coverage, a reachability provider, or project tooling
+title: "feature: "
+labels: ["enhancement", "triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What analysis limitation or workflow problem should be solved?
+    validations:
+      required: true
+  - type: textarea
+    id: semantics
+    attributes:
+      label: C++ or build-system semantics
+      description: Include a small example and explain which roots, edges, escapes, or ownership rules are involved.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false

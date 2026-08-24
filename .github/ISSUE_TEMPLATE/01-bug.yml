@@ -1,0 +1,50 @@
+name: Bug report
+description: Report a crash, indexing failure, incorrect output, or CLI problem
+title: "bug: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: Do not include credentials, proprietary source, or unredacted private build flags.
+  - type: input
+    id: revision
+    attributes:
+      label: cxx-dead revision
+      placeholder: Commit SHA or release tag
+    validations:
+      required: true
+  - type: input
+    id: clang
+    attributes:
+      label: Clang version
+      placeholder: Output of clang++ --version
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Operating system, compiler used to build cxx-dead, and build system.
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command
+      description: The exact cxx-dead command, with sensitive paths and flags redacted.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Actual and expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction or relevant report excerpt
+      description: A small public repository or reduced source fixture is ideal.
+    validations:
+      required: true

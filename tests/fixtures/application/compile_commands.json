@@ -1,0 +1,12 @@
+[
+  {
+    "directory": ".",
+    "file": "app.cpp",
+    "arguments": ["clang++", "-std=c++23", "-c", "app.cpp", "-o", "app.o"]
+  },
+  {
+    "directory": ".",
+    "file": "helper.cpp",
+    "arguments": ["clang++", "-std=c++23", "-c", "helper.cpp", "-o", "helper.o"]
+  }
+]

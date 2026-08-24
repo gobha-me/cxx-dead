@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(cxx-dead VERSION 0.2.0 LANGUAGES CXX)
+project(cxx-dead VERSION 0.3.0 LANGUAGES CXX)
 
 option(CXX_DEAD_BUILD_TESTS "Build cxx-dead tests" ON)
 

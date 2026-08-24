@@ -9,14 +9,29 @@ namespace cxx_dead {
 
 namespace {
 
+int scope_rank(SymbolScope scope) {
+    switch (scope) {
+    case SymbolScope::Reportable:
+        return 3;
+    case SymbolScope::Indexed:
+        return 2;
+    case SymbolScope::ExternalOpaque:
+        return 1;
+    case SymbolScope::Excluded:
+        return 0;
+    }
+    return 0;
+}
+
 void merge_symbol(Symbol& target, Symbol source) {
-    const bool target_was_project_owned = target.project_owned;
+    const auto target_scope = target.scope;
     const bool target_was_defined = target.defined;
     target.defined = target.defined || source.defined;
-    target.project_owned = target.project_owned || source.project_owned;
+    if (scope_rank(source.scope) > scope_rank(target.scope))
+        target.scope = source.scope;
     target.internal_linkage = target.internal_linkage || source.internal_linkage;
     target.is_virtual = target.is_virtual || source.is_virtual;
-    if ((target.file.empty() || (!target_was_project_owned && source.project_owned) ||
+    if ((target.file.empty() || (scope_rank(source.scope) > scope_rank(target_scope)) ||
          (!target_was_defined && source.defined)) &&
         !source.file.empty()) {
         target.file = std::move(source.file);
@@ -37,6 +52,8 @@ SymbolId Graph::add_or_merge_symbol(Symbol symbol) {
     if (symbol.key.empty()) {
         throw std::invalid_argument("symbol key cannot be empty");
     }
+    if (symbol.scope == SymbolScope::Excluded)
+        throw std::invalid_argument("excluded symbols cannot be added to the graph");
     if (const auto existing = key_to_id_.find(symbol.key); existing != key_to_id_.end()) {
         merge_symbol(symbols_[existing->second], std::move(symbol));
         return existing->second;
@@ -92,11 +109,19 @@ bool is_traversable(EdgeKind kind) {
            kind == EdgeKind::VirtualDispatch;
 }
 
+bool has_indexed_body(SymbolScope scope) {
+    return scope == SymbolScope::Reportable || scope == SymbolScope::Indexed;
+}
+
+bool is_reportable(SymbolScope scope) {
+    return scope == SymbolScope::Reportable;
+}
+
 ReachabilityResult analyze_reachability(const Graph& graph) {
     const auto count = graph.symbols().size();
     std::vector<std::vector<SymbolId>> adjacency(count);
     for (const auto& edge : graph.edges()) {
-        if (is_traversable(edge.kind))
+        if (is_traversable(edge.kind) && has_indexed_body(graph.symbols()[edge.from].scope))
             adjacency[edge.from].push_back(edge.to);
     }
 
@@ -123,7 +148,7 @@ ReachabilityResult analyze_reachability(const Graph& graph) {
 
     const auto is_candidate = [&](SymbolId id) {
         const auto& symbol = graph.symbols()[id];
-        return symbol.defined && symbol.project_owned && !result.reachable[id] &&
+        return symbol.defined && is_reportable(symbol.scope) && !result.reachable[id] &&
                symbol.kind != SymbolKind::Synthetic;
     };
 
@@ -193,6 +218,20 @@ std::string_view to_string(SymbolKind kind) {
         return "destructor";
     case SymbolKind::Synthetic:
         return "synthetic";
+    }
+    return "unknown";
+}
+
+std::string_view to_string(SymbolScope scope) {
+    switch (scope) {
+    case SymbolScope::Reportable:
+        return "reportable";
+    case SymbolScope::Indexed:
+        return "indexed";
+    case SymbolScope::ExternalOpaque:
+        return "external_opaque";
+    case SymbolScope::Excluded:
+        return "excluded";
     }
     return "unknown";
 }

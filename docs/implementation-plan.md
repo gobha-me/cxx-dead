@@ -48,13 +48,12 @@ Remaining hardening tasks:
 
 1. Add full implicit-call fixture coverage, including member/base initialization and cleanup paths.
 2. Track spelling and expansion locations and exact definition ranges.
-3. Separate indexed graph scope from owned/reportable scope for frameworks and dependencies.
-4. Limit global-initializer roots to project-owned, linked definitions.
-5. Extend the structured evidence model with provider-composed dynamic edges and suppressions.
-6. Add weak-component/type/directory aggregation above SCCs.
-7. Replace provisional confidence numbers with configurable evidence policy.
-8. Add resource limits, cancellation, and structured incomplete-run diagnostics.
-9. Test command normalization with launchers, response files, modules, PCH, and compiler-specific flags.
+3. Limit global-initializer roots to project-owned, linked definitions.
+4. Extend the structured evidence model with provider-composed dynamic edges and suppressions.
+5. Add weak-component/type/directory aggregation above SCCs.
+6. Replace provisional confidence numbers with configurable evidence policy.
+7. Add resource limits, cancellation, and structured incomplete-run diagnostics.
+8. Test command normalization with launchers, response files, modules, PCH, and compiler-specific flags.
 
 ## Milestone 2 — scalable Clang frontend
 
@@ -157,12 +156,11 @@ Gate: reviewed reports identify abandoned components with materially less noise 
 
 For the next implementation cycle:
 
-1. Split graph participation from report ownership.
-2. Correct definition and macro source mapping.
-3. Add project-owned global initialization modeling.
-4. Add unreachable weak-component aggregation.
-5. Prototype a LibTooling fact collector and benchmark it against AST JSON.
-6. Define stable graph artifact and JSON schemas.
-7. Add CMake File API target ingestion.
+1. Correct definition and macro source mapping.
+2. Add project-owned global initialization modeling.
+3. Add unreachable weak-component aggregation.
+4. Prototype a LibTooling fact collector and benchmark it against AST JSON.
+5. Define stable graph artifact and JSON schemas.
+6. Add CMake File API target ingestion.
 
 Do not start library inference or baseline CI policy until target identity and index completeness are reliable.

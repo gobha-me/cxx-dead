@@ -11,6 +11,7 @@ namespace cxx_dead {
 
 struct IndexOptions {
     std::filesystem::path project_root;
+    std::vector<std::filesystem::path> report_paths;
     std::vector<std::filesystem::path> excluded_paths;
     std::string clang_executable{"clang++"};
     std::string ast_filter;

@@ -46,16 +46,27 @@ void test_shell_split() {
 
 void test_graph_algorithms() {
     cxx_dead::Graph graph;
-    const auto root = graph.add_or_merge_symbol(
-        {.key = "root", .name = "root", .defined = true, .project_owned = true});
+    const auto root = graph.add_or_merge_symbol({.key = "root",
+                                                 .name = "root",
+                                                 .scope = cxx_dead::SymbolScope::Reportable,
+                                                 .defined = true});
     const auto live = graph.add_or_merge_symbol(
-        {.key = "live", .name = "live", .defined = true, .project_owned = true});
+        {.key = "live", .name = "live", .scope = cxx_dead::SymbolScope::Indexed, .defined = true});
     const auto dead_a = graph.add_or_merge_symbol(
-        {.key = "a", .name = "a", .defined = true, .project_owned = true});
+        {.key = "a", .name = "a", .scope = cxx_dead::SymbolScope::Reportable, .defined = true});
     const auto dead_b = graph.add_or_merge_symbol(
-        {.key = "b", .name = "b", .defined = true, .project_owned = true});
-    const auto escaped = graph.add_or_merge_symbol(
-        {.key = "escaped", .name = "escaped", .defined = true, .project_owned = true});
+        {.key = "b", .name = "b", .scope = cxx_dead::SymbolScope::Reportable, .defined = true});
+    const auto escaped = graph.add_or_merge_symbol({.key = "escaped",
+                                                    .name = "escaped",
+                                                    .scope = cxx_dead::SymbolScope::Reportable,
+                                                    .defined = true});
+    const auto opaque = graph.add_or_merge_symbol(
+        {.key = "opaque", .name = "opaque", .scope = cxx_dead::SymbolScope::ExternalOpaque});
+    const auto behind_opaque =
+        graph.add_or_merge_symbol({.key = "behind_opaque",
+                                   .name = "behind_opaque",
+                                   .scope = cxx_dead::SymbolScope::Reportable,
+                                   .defined = true});
     const cxx_dead::Evidence test_evidence{.provider = "test_provider", .reason = "arbitrary"};
     graph.add_root(root, cxx_dead::RootKind::Manual, test_evidence);
     graph.add_root(root, cxx_dead::RootKind::Manual, test_evidence);
@@ -65,16 +76,29 @@ void test_graph_algorithms() {
     graph.add_edge(dead_b, dead_a, cxx_dead::EdgeKind::DirectCall, test_evidence);
     graph.add_escape(escaped, cxx_dead::EscapeKind::AddressTaken, test_evidence, root);
     graph.add_escape(escaped, cxx_dead::EscapeKind::AddressTaken, test_evidence, root);
+    graph.add_edge(root, opaque, cxx_dead::EdgeKind::DirectCall, test_evidence);
+    graph.add_edge(opaque, behind_opaque, cxx_dead::EdgeKind::DirectCall, test_evidence);
+
+    const auto promoted = graph.add_or_merge_symbol(
+        {.key = "promoted", .scope = cxx_dead::SymbolScope::ExternalOpaque});
+    require(graph.add_or_merge_symbol(
+                {.key = "promoted", .scope = cxx_dead::SymbolScope::Indexed}) == promoted &&
+                graph.add_or_merge_symbol(
+                    {.key = "promoted", .scope = cxx_dead::SymbolScope::Reportable}) == promoted &&
+                graph.symbols()[promoted].scope == cxx_dead::SymbolScope::Reportable,
+            "merged symbol did not promote to its strongest scope");
 
     const auto result = cxx_dead::analyze_reachability(graph);
     require(result.reachable[root] && result.reachable[live], "direct calls should be traversed");
     require(!result.reachable[escaped], "address escapes must not imply a call");
+    require(result.reachable[opaque] && !result.reachable[behind_opaque],
+            "external opaque symbol did not terminate traversal");
     require(!result.reachable[dead_a] && !result.reachable[dead_b],
             "dead cycle was marked reachable");
     const bool found_cycle = std::ranges::any_of(
         result.unreachable_sccs, [](const auto& component) { return component.size() == 2U; });
     require(found_cycle, "Tarjan analysis did not identify the dead cycle");
-    require(graph.roots().size() == 1U && graph.edges().size() == 3U &&
+    require(graph.roots().size() == 1U && graph.edges().size() == 5U &&
                 graph.escapes().size() == 1U,
             "duplicate structured evidence facts were not deduplicated");
     require(graph.edges().front().evidence == test_evidence,
@@ -87,6 +111,15 @@ void test_graph_algorithms() {
         invalid_escape_rejected = true;
     }
     require(invalid_escape_rejected, "escape accepted an invalid symbol reference");
+
+    bool excluded_symbol_rejected = false;
+    try {
+        static_cast<void>(graph.add_or_merge_symbol(
+            {.key = "excluded", .scope = cxx_dead::SymbolScope::Excluded}));
+    } catch (const std::invalid_argument&) {
+        excluded_symbol_rejected = true;
+    }
+    require(excluded_symbol_rejected, "excluded symbol entered the graph");
 
     const auto report = cxx_dead::build_report(graph, result);
     const auto escaped_finding =
@@ -155,8 +188,8 @@ void test_clang_integration() {
     const auto report_json = cxx_dead::json::parse(json_output.str());
     require(report_json.find("findings") != nullptr, "JSON report has no findings field");
     require(report_json.find("schema_version") != nullptr &&
-                report_json.find("schema_version")->as_number() == 2.0,
-            "JSON report does not use structured-evidence schema version 2");
+                report_json.find("schema_version")->as_number() == 3.0,
+            "JSON report does not use symbol-scope schema version 3");
     require(report_json.find("roots") != nullptr && report_json.find("roots")->is_array(),
             "JSON report has no structured roots field");
 

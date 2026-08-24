@@ -36,7 +36,8 @@ command normalization ----> clang++ -ast-dump=json
 - `process` runs Clang directly with `fork`/`execvp`, captures stdout/stderr concurrently, and never evaluates compile commands through a shell.
 - `indexer` converts Clang AST JSON into declarations, provider-attributed calls,
   construction/destruction edges, address escapes, roots, record inheritance, and conservative
-  override edges.
+  override edges. It assigns reportable, indexed, external-opaque, or excluded scope from configured
+  path boundaries and materializes opaque references lazily.
 - `graph` merges symbols, stores typed roots, edges, and escapes with structured evidence, traverses
   live edges, and computes unreachable SCCs.
 - `report` applies typed evidence classifications and writes terminal or schema-versioned JSON
@@ -44,6 +45,15 @@ command normalization ----> clang++ -ast-dump=json
 - `json` is a small standards-oriented parser/escaper used for both Clang and compilation database input, avoiding a prototype package dependency.
 
 The graph module has no Clang dependency. A scalable frontend can replace `ClangAstIndexer` while retaining analysis and reporting tests.
+
+## Symbol scope
+
+`--project-root` bounds definitions that may participate in reachability. Repeatable
+`--report-path` values select owned definitions eligible for findings and default to the project
+root. Remaining project definitions are indexed for traversal without becoming candidates.
+Referenced declarations outside the project root become opaque terminal symbols only when used;
+`--exclude-path` takes precedence and omits declarations entirely. Merged cross-TU symbols retain
+the strongest observed scope: reportable, then indexed, then external opaque.
 
 ## Reachability semantics
 

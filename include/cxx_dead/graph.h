@@ -20,6 +20,13 @@ enum class SymbolKind {
     Synthetic,
 };
 
+enum class SymbolScope {
+    Reportable,
+    Indexed,
+    ExternalOpaque,
+    Excluded,
+};
+
 enum class EdgeKind {
     DirectCall,
     Constructs,
@@ -53,8 +60,8 @@ struct Symbol {
     std::size_t line{0};
     std::size_t end_line{0};
     SymbolKind kind{SymbolKind::Function};
+    SymbolScope scope{SymbolScope::ExternalOpaque};
     bool defined{false};
-    bool project_owned{false};
     bool internal_linkage{false};
     bool is_virtual{false};
 };
@@ -118,8 +125,11 @@ struct ReachabilityResult {
 };
 
 [[nodiscard]] bool is_traversable(EdgeKind kind);
+[[nodiscard]] bool has_indexed_body(SymbolScope scope);
+[[nodiscard]] bool is_reportable(SymbolScope scope);
 [[nodiscard]] ReachabilityResult analyze_reachability(const Graph& graph);
 [[nodiscard]] std::string_view to_string(SymbolKind kind);
+[[nodiscard]] std::string_view to_string(SymbolScope scope);
 [[nodiscard]] std::string_view to_string(EdgeKind kind);
 [[nodiscard]] std::string_view to_string(RootKind kind);
 [[nodiscard]] std::string_view to_string(EscapeKind kind);

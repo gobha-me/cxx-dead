@@ -17,6 +17,7 @@ namespace {
 struct CliOptions {
     std::filesystem::path compilation_database;
     std::filesystem::path project_root = std::filesystem::current_path();
+    std::vector<std::filesystem::path> report_paths;
     std::optional<std::filesystem::path> translation_unit_root;
     std::vector<std::filesystem::path> excluded_paths;
     std::optional<std::filesystem::path> output;
@@ -35,7 +36,8 @@ Application-mode whole-program C++ reachability prototype.
 
 Options:
   --compile-commands PATH   Compilation database (default: compile_commands.json)
-  --project-root PATH       Only report definitions below this path (default: cwd)
+  --project-root PATH       Index definitions below this workspace path (default: cwd)
+  --report-path PATH        Report definitions below this path (repeatable; default: project root)
   --tu-root PATH            Analyze only translation units below this path
   --exclude-path PATH       Exclude declarations below this path (repeatable)
   --mode application       Analysis context; only application is supported in the MVP
@@ -66,13 +68,15 @@ CliOptions parse_cli(int count, char** arguments) {
             std::exit(0);
         }
         if (argument == "--version") {
-            std::cout << "cxx-dead 0.2.0\n";
+            std::cout << "cxx-dead 0.3.0\n";
             std::exit(0);
         }
         if (argument == "--compile-commands") {
             options.compilation_database = require_value(index, count, arguments, argument);
         } else if (argument == "--project-root") {
             options.project_root = require_value(index, count, arguments, argument);
+        } else if (argument == "--report-path") {
+            options.report_paths.emplace_back(require_value(index, count, arguments, argument));
         } else if (argument == "--tu-root") {
             options.translation_unit_root = require_value(index, count, arguments, argument);
         } else if (argument == "--exclude-path") {
@@ -140,6 +144,7 @@ int main(int argc, char** argv) {
         }
         cxx_dead::ClangAstIndexer indexer({
             .project_root = options.project_root,
+            .report_paths = options.report_paths,
             .excluded_paths = options.excluded_paths,
             .clang_executable = options.clang,
             .ast_filter = options.ast_filter,

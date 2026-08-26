@@ -3,14 +3,18 @@
 #include "cxx_dead/graph.h"
 #include "cxx_dead/indexer.h"
 #include "cxx_dead/json.h"
+#include "cxx_dead/process.h"
 #include "cxx_dead/report.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <filesystem>
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
+#include <thread>
 
 namespace {
 
@@ -235,16 +239,25 @@ void test_clang_integration() {
         "static class member should have one external-linkage identity across translation units");
 
     const auto report = cxx_dead::build_report(indexed.graph, reachability);
+    const cxx_dead::AnalysisMetadata indexed_metadata{
+        .run = {.state = cxx_dead::RunState::Complete,
+                .frontend = indexed.frontend,
+                .partial_graph_discarded = false,
+                .translation_units = indexed.translation_unit_diagnostics},
+    };
     std::ostringstream json_output;
     cxx_dead::write_json_report(json_output, indexed.graph, reachability, report,
-                                indexed.diagnostics);
+                                indexed.diagnostics, indexed_metadata);
     const auto report_json = cxx_dead::json::parse(json_output.str());
     require(report_json.find("findings") != nullptr, "JSON report has no findings field");
     require(report_json.find("schema_version") != nullptr &&
-                report_json.find("schema_version")->as_number() == 6.0,
-            "JSON report does not use analysis-context schema version 6");
+                report_json.find("schema_version")->as_number() == 7.0,
+            "JSON report does not use run-state schema version 7");
     require(report_json.find("roots") != nullptr && report_json.find("roots")->is_array(),
             "JSON report has no structured roots field");
+    require(report_json.find("run") != nullptr &&
+                report_json.find("run")->string_or("state") == "complete",
+            "JSON report does not identify a complete run");
 
     std::ostringstream artifact_output;
     cxx_dead::write_graph_artifact(artifact_output, indexed.graph,
@@ -275,9 +288,15 @@ void test_clang_integration() {
             "graph artifact depends on translation-unit ordering");
     const auto reversed_reachability = cxx_dead::analyze_reachability(reversed.graph);
     const auto reversed_report = cxx_dead::build_report(reversed.graph, reversed_reachability);
+    const cxx_dead::AnalysisMetadata reversed_metadata{
+        .run = {.state = cxx_dead::RunState::Complete,
+                .frontend = reversed.frontend,
+                .partial_graph_discarded = false,
+                .translation_units = reversed.translation_unit_diagnostics},
+    };
     std::ostringstream reversed_report_output;
     cxx_dead::write_json_report(reversed_report_output, reversed.graph, reversed_reachability,
-                                reversed_report, reversed.diagnostics);
+                                reversed_report, reversed.diagnostics, reversed_metadata);
     require(json_output.str() == reversed_report_output.str(),
             "JSON report depends on translation-unit ordering");
 
@@ -297,7 +316,7 @@ void test_clang_integration() {
 
     std::ostringstream human_output;
     cxx_dead::write_human_report(human_output, indexed.graph, reachability, report,
-                                 indexed.diagnostics);
+                                 indexed.diagnostics, indexed_metadata);
     require(human_output.str().contains("ROOTS") &&
                 human_output.str().contains("[escape] clang_ast"),
             "human report does not expose root and escape evidence");
@@ -325,13 +344,56 @@ void test_clang_integration() {
 void test_libtooling_availability_contract() {
     if (cxx_dead::libtooling_available())
         return;
+    const std::vector<cxx_dead::CompileCommand> commands{{
+        .directory = ".",
+        .file = "unavailable.cpp",
+        .arguments = {"clang++", "-c", "unavailable.cpp"},
+    }};
     try {
-        static_cast<void>(cxx_dead::LibToolingIndexer({.project_root = "."}).index({}));
+        static_cast<void>(cxx_dead::LibToolingIndexer({.project_root = "."}).index(commands));
         throw std::runtime_error("unavailable LibTooling frontend unexpectedly ran");
-    } catch (const std::exception& error) {
+    } catch (const cxx_dead::IndexingError& error) {
         require(std::string(error.what()).contains("CXX_DEAD_ENABLE_LIBTOOLING=ON"),
                 "unavailable LibTooling frontend has no actionable diagnostic");
+        require(error.diagnostics().state == cxx_dead::RunState::Unsupported &&
+                    error.diagnostics().translation_units.size() == 1U &&
+                    error.diagnostics().translation_units.front().status ==
+                        cxx_dead::TranslationUnitStatus::Unsupported,
+                "unavailable frontend did not produce structured unsupported diagnostics");
     }
+}
+
+void test_process_limits_and_cancellation() {
+    using namespace std::chrono_literals;
+    const auto fixture = std::string(CXX_DEAD_PROCESS_FIXTURE);
+
+    const auto timeout_started = std::chrono::steady_clock::now();
+    const auto timed_out =
+        cxx_dead::run_process({fixture, "spawn"}, std::filesystem::current_path(),
+                              {.timeout = 75ms, .termination_grace = 25ms});
+    require(timed_out.termination == cxx_dead::ProcessTermination::TimedOut,
+            "process timeout did not return a typed termination reason");
+    require(std::chrono::steady_clock::now() - timeout_started < 2s,
+            "process timeout did not terminate the child process group promptly");
+
+    const auto limited =
+        cxx_dead::run_process({fixture, "output"}, std::filesystem::current_path(),
+                              {.standard_output_limit = 128U, .termination_grace = 25ms});
+    require(limited.termination == cxx_dead::ProcessTermination::OutputLimitExceeded &&
+                limited.standard_output.size() == 128U,
+            "process output limit was not enforced without retaining excess bytes");
+
+    std::atomic_bool cancelled{false};
+    std::thread canceller([&] {
+        std::this_thread::sleep_for(75ms);
+        cancelled.store(true);
+    });
+    const auto cancelled_result = cxx_dead::run_process(
+        {fixture, "spawn"}, std::filesystem::current_path(),
+        {.cancellation_requested = [&] { return cancelled.load(); }, .termination_grace = 25ms});
+    canceller.join();
+    require(cancelled_result.termination == cxx_dead::ProcessTermination::Cancelled,
+            "process cancellation did not return a typed termination reason");
 }
 
 } // namespace
@@ -343,6 +405,7 @@ int main() {
         test_graph_algorithms();
         test_stable_identity_contract();
         test_clang_integration();
+        test_process_limits_and_cancellation();
         test_libtooling_availability_contract();
         std::cout << "all cxx-dead tests passed\n";
         return 0;

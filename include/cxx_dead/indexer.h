@@ -3,8 +3,13 @@
 #include "cxx_dead/compile_database.h"
 #include "cxx_dead/graph.h"
 
+#include <chrono>
 #include <filesystem>
+#include <functional>
+#include <optional>
+#include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace cxx_dead {
@@ -12,6 +17,50 @@ namespace cxx_dead {
 enum class IndexFrontend {
     AstJson,
     LibTooling,
+};
+
+enum class RunState {
+    Complete,
+    Incomplete,
+    Unsupported,
+};
+
+enum class TranslationUnitStatus {
+    Indexed,
+    Failed,
+    Skipped,
+    TimedOut,
+    Unsupported,
+    Cancelled,
+};
+
+struct TranslationUnitDiagnostic {
+    std::filesystem::path file;
+    TranslationUnitStatus status{TranslationUnitStatus::Indexed};
+    std::string stage;
+    std::string message;
+    std::optional<int> exit_code;
+    std::optional<int> signal;
+};
+
+struct RunDiagnostics {
+    RunState state{RunState::Complete};
+    IndexFrontend frontend{IndexFrontend::AstJson};
+    bool partial_graph_discarded{false};
+    std::vector<TranslationUnitDiagnostic> translation_units;
+};
+
+class IndexingError : public std::runtime_error {
+  public:
+    IndexingError(std::string message, RunDiagnostics diagnostics)
+        : std::runtime_error(std::move(message)), diagnostics_(std::move(diagnostics)) {}
+
+    [[nodiscard]] const RunDiagnostics& diagnostics() const noexcept {
+        return diagnostics_;
+    }
+
+  private:
+    RunDiagnostics diagnostics_;
 };
 
 struct IndexOptions {
@@ -22,6 +71,10 @@ struct IndexOptions {
     std::string clang_executable{"clang++"};
     std::string ast_filter;
     std::vector<std::string> manual_roots;
+    std::chrono::milliseconds translation_unit_timeout{0};
+    std::chrono::milliseconds index_timeout{0};
+    std::size_t max_ast_bytes{0};
+    std::function<bool()> cancellation_requested;
     bool verbose{false};
 };
 
@@ -32,6 +85,7 @@ struct IndexResult {
     std::size_t translation_units{0};
     std::size_t ast_bytes{0};
     std::size_t fact_bytes{0};
+    std::vector<TranslationUnitDiagnostic> translation_unit_diagnostics;
 };
 
 class ClangAstIndexer {
@@ -56,5 +110,7 @@ class LibToolingIndexer {
 
 [[nodiscard]] bool libtooling_available();
 [[nodiscard]] std::string_view to_string(IndexFrontend frontend);
+[[nodiscard]] std::string_view to_string(RunState state);
+[[nodiscard]] std::string_view to_string(TranslationUnitStatus status);
 
 } // namespace cxx_dead

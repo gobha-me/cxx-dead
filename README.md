@@ -23,6 +23,8 @@ The prototype already handles:
 - optional direct LibTooling fact extraction without full JSON AST materialization;
 - configuration-aware stable symbol identities and deterministic graph artifacts;
 - target-scoped analysis from CMake File API or explicit manifest metadata;
+- bounded AST JSON indexing with per-TU/run timeouts and output-size limits;
+- structured complete, incomplete, and unsupported run diagnostics;
 - human and versioned JSON output;
 - complete display signatures and exact spelling/expansion source extents.
 
@@ -155,6 +157,28 @@ cxx-dead build/compile_commands.json \
   --output cxx-dead.json
 ```
 
+Bound the dependency-light AST JSON frontend for routine or untrusted-duration runs:
+
+```bash
+cxx-dead build/compile_commands.json \
+  --project-root . \
+  --tu-timeout 120 \
+  --index-timeout 900 \
+  --max-ast-bytes 536870912 \
+  --format json
+```
+
+The limits are opt-in and use whole seconds and bytes. Exceeding any limit discards all graph facts,
+emits an `incomplete` run document without a `findings` field, and returns status 1. `SIGINT` and
+`SIGTERM` terminate the active Clang process group before returning a cancelled diagnostic. Hard
+subprocess limits are not silently approximated by the in-process LibTooling frontend: combining
+them with `--frontend libtooling` returns a structured `unsupported` run.
+
+Choose limits from a representative unrestricted run rather than treating the example as a policy:
+allow headroom above the slowest translation unit and total indexing time, and remember that a
+template-heavy AST JSON document may require hundreds of MiB or more. For routine automation, a
+limit failure is an analysis failure to investigate or reconfigure, never a passing no-findings run.
+
 Write a deterministic, independently versioned graph artifact for later comparison or indexing
 work. Give each separately analyzed build configuration a durable identifier:
 
@@ -203,7 +227,10 @@ Definitions elsewhere under the project root are indexed but never reported. Ref
 outside the project root are opaque graph terminals, and `--exclude-path` removes matching
 declarations entirely.
 
-`--fail-on-unreachable` returns status 2 when any unreachable candidate is present. Analysis/indexing errors return status 1. A successful advisory run returns status 0 regardless of findings.
+`--fail-on-unreachable` returns status 2 when a complete run contains any unreachable candidate.
+Analysis/indexing errors, resource limits, and unsupported requests return status 1. A successful
+advisory run returns status 0 regardless of findings. Signal cancellation remains fail-closed and
+uses the conventional signal-derived status (130 for `SIGINT`, 143 for `SIGTERM`).
 
 Run `cxx-dead --help` for all current options.
 
@@ -234,8 +261,9 @@ The numeric confidence values in JSON are provisional presentation values, not s
 
 Every classification is backed by an ordered evidence chain. Root, edge, and escape facts retain a
 provider and human-readable reason, while analysis decisions use typed facts rather than matching
-those presentation strings. JSON report schema version 6 adds an explicit application/target
-analysis context; version 5 changed `key` to a configuration-aware stable symbol ID. Version 4 added
+those presentation strings. JSON report schema version 7 adds explicit run state and
+per-translation-unit diagnostics; version 6 added an application/target analysis context, and
+version 5 changed `key` to a configuration-aware stable symbol ID. Version 4 added
 complete signatures and spelling/expansion locations and definition ranges while retaining the flat
 finding `file` and `line` fields. Graph artifact schema version 2 adds the matching target context;
 identity schema version 1 is unchanged and remains independent from the report schema.
@@ -247,7 +275,9 @@ translation unit is assumed to be linked into it. With `--cmake-build-dir` or `-
 only the selected target's transitive link closure is indexed. Target mode records the selected
 configuration, target id/name/kind, and closure in human, JSON, and graph-artifact output.
 
-AST JSON invokes Clang directly with normalized compile arguments and without a shell. LibTooling
+AST JSON invokes Clang directly with normalized compile arguments and without a shell. Each Clang
+invocation runs in a dedicated process group so timeout, output-limit, or cancellation handling also
+terminates descendants. LibTooling
 runs an in-process `FrontendAction` over the same compilation commands. Both remove output and
 dependency-generation flags and merge one neutral graph fact batch per translation unit.
 Repository-provided compiler plugins or response files remain part of the trusted build input.

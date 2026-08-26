@@ -279,8 +279,8 @@ void test_golden_corpus() {
                                 indexed.diagnostics);
     const auto report_json = cxx_dead::json::parse(json_output.str());
     require(report_json.find("schema_version") != nullptr &&
-                report_json.find("schema_version")->as_number() == 6.0,
-            "golden JSON report should use schema version 6");
+                report_json.find("schema_version")->as_number() == 7.0,
+            "golden JSON report should use run-state schema version 7");
     require(report_json.find("roots") != nullptr &&
                 report_json.find("roots")->as_array().size() >= 2U,
             "golden JSON report should expose structured root evidence");
@@ -410,21 +410,93 @@ void test_excluded_generated_path() {
 void test_incomplete_indexing_fails_closed() {
     const auto fixture = std::filesystem::path(CXX_DEAD_GOLDEN_FIXTURE_DIR);
     const auto source = fixture / "invalid.cpp";
-    const std::vector<cxx_dead::CompileCommand> commands{{
+    const auto fixture_commands =
+        cxx_dead::load_compilation_database(fixture / "compile_commands.json");
+    const cxx_dead::CompileCommand invalid_command{
         .directory = fixture,
         .file = source,
         .arguments = {"clang++", "-std=c++23", "-c", source.string(), "-o", "invalid.o"},
-    }};
+    };
+    const std::vector<cxx_dead::CompileCommand> commands{fixture_commands.front(), invalid_command,
+                                                         fixture_commands.back()};
     try {
         const cxx_dead::ClangAstIndexer indexer({.project_root = fixture});
         static_cast<void>(indexer.index(commands));
         throw std::runtime_error("invalid translation unit unexpectedly produced an index");
-    } catch (const std::exception& error) {
+    } catch (const cxx_dead::IndexingError& error) {
         const std::string message = error.what();
         require(message.contains("Clang AST indexing failed for"),
                 "incomplete run should identify indexing failure");
         require(message.contains("invalid.cpp"),
                 "incomplete run should identify the failed translation unit");
+        const auto& run = error.diagnostics();
+        require(run.state == cxx_dead::RunState::Incomplete && run.partial_graph_discarded,
+                "failed run did not discard already-indexed graph facts");
+        require(run.translation_units.size() == 3U &&
+                    run.translation_units[0].status == cxx_dead::TranslationUnitStatus::Indexed &&
+                    run.translation_units[1].status == cxx_dead::TranslationUnitStatus::Failed &&
+                    run.translation_units[2].status == cxx_dead::TranslationUnitStatus::Skipped,
+                "failed run did not identify indexed, failed, and skipped translation units");
+        std::ostringstream output;
+        cxx_dead::write_json_run_diagnostic(output, error);
+        const auto document = cxx_dead::json::parse(output.str());
+        require(document.find("run") != nullptr && document.find("findings") == nullptr,
+                "incomplete JSON could be mistaken for a normal dead-code report");
+    }
+}
+
+void test_resource_limits_fail_closed() {
+    using namespace std::chrono_literals;
+    const auto fixture = std::filesystem::path(CXX_DEAD_GOLDEN_FIXTURE_DIR);
+    auto commands = cxx_dead::load_compilation_database(fixture / "compile_commands.json");
+    commands.resize(2U);
+
+    try {
+        static_cast<void>(
+            cxx_dead::ClangAstIndexer({
+                                          .project_root = fixture,
+                                          .clang_executable = CXX_DEAD_PROCESS_FIXTURE,
+                                          .translation_unit_timeout = 75ms,
+                                      })
+                .index(commands));
+        throw std::runtime_error("timed-out translation unit unexpectedly produced an index");
+    } catch (const cxx_dead::IndexingError& error) {
+        const auto& units = error.diagnostics().translation_units;
+        require(units.size() == 2U &&
+                    units[0].status == cxx_dead::TranslationUnitStatus::TimedOut &&
+                    units[1].status == cxx_dead::TranslationUnitStatus::Skipped,
+                "timeout did not identify timed-out and skipped translation units");
+    }
+
+    try {
+        static_cast<void>(
+            cxx_dead::ClangAstIndexer({
+                                          .project_root = fixture,
+                                          .clang_executable = CXX_DEAD_PROCESS_FIXTURE,
+                                          .index_timeout = 75ms,
+                                      })
+                .index(commands));
+        throw std::runtime_error("index timeout unexpectedly produced an index");
+    } catch (const cxx_dead::IndexingError& error) {
+        const auto& units = error.diagnostics().translation_units;
+        require(units.front().status == cxx_dead::TranslationUnitStatus::TimedOut &&
+                    units.front().message.contains("index timeout"),
+                "whole-index timeout was not distinguished from a per-TU timeout");
+    }
+
+    try {
+        static_cast<void>(cxx_dead::ClangAstIndexer({
+                                                        .project_root = fixture,
+                                                        .max_ast_bytes = 128U,
+                                                    })
+                              .index(commands));
+        throw std::runtime_error("oversized AST unexpectedly produced an index");
+    } catch (const cxx_dead::IndexingError& error) {
+        const auto& units = error.diagnostics().translation_units;
+        require(units.size() == 2U && units[0].status == cxx_dead::TranslationUnitStatus::Failed &&
+                    units[0].stage == "ast_output" &&
+                    units[1].status == cxx_dead::TranslationUnitStatus::Skipped,
+                "AST output limit did not fail closed with structured diagnostics");
     }
 }
 
@@ -435,6 +507,7 @@ int main() {
         test_golden_corpus();
         test_excluded_generated_path();
         test_incomplete_indexing_fails_closed();
+        test_resource_limits_fail_closed();
         std::cout << "all golden corpus tests passed\n";
         return 0;
     } catch (const std::exception& error) {

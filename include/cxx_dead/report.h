@@ -1,6 +1,6 @@
 #pragma once
 
-#include "cxx_dead/graph.h"
+#include "cxx_dead/indexer.h"
 
 #include <iosfwd>
 #include <optional>
@@ -10,7 +10,7 @@
 
 namespace cxx_dead {
 
-inline constexpr int report_schema_version = 6;
+inline constexpr int report_schema_version = 7;
 
 struct AnalysisMetadata {
     std::string mode{"application"};
@@ -20,6 +20,7 @@ struct AnalysisMetadata {
     std::string target_name;
     std::string target_kind;
     std::vector<std::string> closure_targets;
+    RunDiagnostics run;
 };
 
 enum class Classification {
@@ -71,5 +72,9 @@ void write_json_report(std::ostream& output, const Graph& graph,
                        const ReachabilityResult& reachability, const AnalysisReport& report,
                        const std::vector<std::string>& diagnostics,
                        const AnalysisMetadata& metadata = {});
+void write_human_run_diagnostic(std::ostream& output, const IndexingError& error,
+                                const AnalysisMetadata& metadata = {});
+void write_json_run_diagnostic(std::ostream& output, const IndexingError& error,
+                               const AnalysisMetadata& metadata = {});
 
 } // namespace cxx_dead

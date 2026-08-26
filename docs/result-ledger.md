@@ -27,6 +27,8 @@ fact bytes are an in-memory neutral-fact payload estimate before cross-TU mergin
 
 | Run | Revision / environment | State | Reviewed findings | TP | FP | Known FN | Wall time | Peak RSS | AST / fact bytes | Defined / graph symbols | Edges |
 | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| AST output-limit fixture | v0.8.0 candidate; 128-byte per-TU bound | incomplete | 0 | 0 | 0 | 0 | bounded by fixture | not benchmarked | 128 accepted / 0 committed | 0 committed | 0 committed |
+| AST timeout/process-group fixture | v0.8.0 candidate; 75 ms test bound | incomplete | 0 | 0 | 0 | 0 | under 2 s assertion | not benchmarked | 0 accepted / 0 committed | 0 committed | 0 committed |
 | Target fixture, production executable | v0.7.0 candidate; CMake File API; Clang 20.1.8 | complete | 4 / 4 | 4 | 0 | 0 | not benchmarked | not benchmarked | not captured | 8 / 8 | 3 |
 | Target fixture, test executable | v0.7.0 candidate; CMake File API; Clang 20.1.8 | complete | 4 / 4 | 4 | 0 | 0 | not benchmarked | not benchmarked | not captured | 6 / 6 | 1 |
 | Golden corpus, LibTooling | v0.6.0 candidate; Clang 20.1.8; Linux x86-64 | complete | 18 / 18 | 18 | 0 | 0 | 9 ms | 87,796 KiB | 0 / 25,472 | 39 / 40 | 22 |

@@ -39,7 +39,9 @@ command normalization ---------------------------> AST JSON subprocess ----+
 - `compile_database` parses both `arguments` and shell-quoted `command` entries.
 - `build_model` parses CMake File API codemodel-v2 replies or schema-versioned explicit manifests,
   resolves a selected target's link closure, and maps its C++ sources back to compile commands.
-- `process` runs Clang directly with `fork`/`execvp`, captures stdout/stderr concurrently, and never evaluates compile commands through a shell.
+- `process` runs Clang directly with `fork`/`execvp`, captures stdout/stderr concurrently, applies
+  wall-time/output bounds, and terminates the dedicated child process group on limit or cancellation.
+  It never evaluates compile commands through a shell.
 - `indexer` converts Clang AST JSON into declarations, provider-attributed calls,
   construction/destruction edges, address escapes, roots, record inheritance, and conservative
   override edges. It assigns reportable, indexed, external-opaque, or excluded scope from configured
@@ -129,20 +131,21 @@ the expansion extent is primary when present and spelling is primary otherwise.
 
 Clang omits repeated file and line fields in nested JSON nodes. The indexer resolves those omissions
 from traversal context and a cached per-file byte-offset line map rather than emitting line zero.
-JSON report schema version 6 adds analysis configuration and target context; version 5 exposed stable
-keys, while version 4 introduced spelling and expansion extents. Graph artifact schema 2 adds the
+JSON report schema version 7 adds run state and translation-unit diagnostics; version 6 added
+analysis configuration and target context, version 5 exposed stable keys, and version 4 introduced
+spelling and expansion extents. Graph artifact schema 2 adds the
 same target context. Identity schema 1 remains independently versioned.
 
 ## Failure model
 
-The index is all-or-nothing. A nonzero subprocess result, malformed AST JSON, or failed LibTooling
-action aborts analysis with exit status 1. This avoids presenting an incomplete graph as evidence
-of deadness.
+The index is all-or-nothing. A nonzero subprocess result, malformed AST JSON, resource limit, or
+failed LibTooling action aborts analysis. Already collected facts are destroyed before reporting.
+AST JSON subprocesses run in their own process groups; a wall-time limit, output limit, `SIGINT`, or
+`SIGTERM` terminates Clang and its descendants with TERM followed by KILL after a short grace period.
 
 ## Run states
 
-The prototype uses these run-state definitions even though successful JSON reports do not yet carry
-an explicit state field:
+JSON report schema 7 carries these run states and the status of every selected translation unit:
 
 - **complete**: every selected translation unit produced parseable AST facts and at least one
   application root was found. Only a complete run may emit findings or return the policy status 2.
@@ -152,10 +155,16 @@ an explicit state field:
 - **unsupported**: the requested analysis context is not implemented, such as a mode other than
   `application`. The request is rejected before a report is produced and returns status 1.
 
+Translation-unit status is `indexed`, `failed`, `skipped`, `timed_out`, `unsupported`, or
+`cancelled`, with a stage and cause. Incomplete and unsupported JSON documents deliberately omit
+roots and findings, and graph artifacts are written only after a complete index. Hard resource
+limits are currently specific to AST JSON; LibTooling rejects them as unsupported because its
+in-process action cannot be safely preempted.
+
 An unsupported language or framework pattern inside an otherwise complete application run is an
 analysis limitation, not a different run state. Such findings remain advisory and the limitation
 must be recorded in the result ledger or a diagnostic until the frontend can model it
-conservatively. Structured run-state output and resource-limit behavior remain follow-up work.
+conservatively.
 
 ## Security boundary
 

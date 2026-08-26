@@ -3,6 +3,7 @@
 #include "cxx_dead/report.h"
 
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <iostream>
 #include <sstream>
@@ -138,6 +139,26 @@ void test_incomplete_libtooling_run_fails_closed() {
     }
 }
 
+void test_libtooling_hard_limits_are_explicitly_unsupported() {
+    const auto fixture = std::filesystem::path(CXX_DEAD_GOLDEN_FIXTURE_DIR);
+    auto commands = cxx_dead::load_compilation_database(fixture / "compile_commands.json");
+    commands.resize(1U);
+    try {
+        static_cast<void>(
+            cxx_dead::LibToolingIndexer({
+                                            .project_root = fixture,
+                                            .translation_unit_timeout = std::chrono::seconds(1),
+                                        })
+                .index(commands));
+        throw std::runtime_error("LibTooling unexpectedly accepted a hard timeout");
+    } catch (const cxx_dead::IndexingError& error) {
+        require(error.diagnostics().state == cxx_dead::RunState::Unsupported &&
+                    error.diagnostics().translation_units.front().status ==
+                        cxx_dead::TranslationUnitStatus::Unsupported,
+                "LibTooling hard limit did not produce an unsupported run diagnostic");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -148,6 +169,7 @@ int main() {
         test_scope_frontend_parity();
         test_exclusion_frontend_parity();
         test_incomplete_libtooling_run_fails_closed();
+        test_libtooling_hard_limits_are_explicitly_unsupported();
         std::cout << "all frontend parity tests passed\n";
         return 0;
     } catch (const std::exception& error) {

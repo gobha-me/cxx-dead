@@ -14,16 +14,19 @@ The prototype already handles:
 - conservative virtual dispatch across known class hierarchies;
 - address-taken functions as provider-attributed escape evidence;
 - `main()`, global-initializer calls, and manual roots;
-- an experimental Clang declaration-name filter for namespace-scoped trials;
+- an experimental declaration-name filter for namespace-scoped trials;
 - unreachable cycles using Tarjan's SCC algorithm;
 - aggregation when every defined member of a type is unreachable;
 - internal-linkage confidence evidence;
 - structured root, graph-edge, escape, and classification evidence;
 - separate reachability and reporting scopes for framework-aware analysis;
-- human and versioned JSON output.
+- optional direct LibTooling fact extraction without full JSON AST materialization;
+- human and versioned JSON output;
 - complete display signatures and exact spelling/expansion source extents.
 
-It does not yet reconstruct linker targets, infer library APIs, model arbitrary registration/plugin systems, analyze multiple build configurations, or scale efficiently to large standard-library-heavy projects. Findings are candidates for review, not deletion instructions.
+It does not yet reconstruct linker targets, infer library APIs, model arbitrary registration/plugin
+systems, analyze multiple build configurations, or incrementally cache translation-unit facts.
+Findings are candidates for review, not deletion instructions.
 
 ## Development status
 
@@ -31,12 +34,13 @@ It does not yet reconstruct linker targets, infer library APIs, model arbitrary 
 change between revisions. It is useful for experiments and reviewed audits, but it is not yet a
 safe basis for automatic source deletion or blocking production CI.
 
-The current implementation is Linux/POSIX-only because the Clang subprocess runner uses POSIX
-process APIs. It has been exercised with GCC 14, Clang 20, and Clang 20 AST output.
+The current implementation is Linux/POSIX-only because the AST JSON frontend uses POSIX process
+APIs. It has been exercised with GCC 14, Clang 18/20, and Clang 20 AST output.
 
 ## Build
 
-Requirements are a C++23 compiler, CMake 3.25 or later, and a Clang executable capable of `-ast-dump=json` (tested with Clang 20).
+The default build requires a C++23 compiler, CMake 3.25 or later, and a Clang executable capable of
+`-ast-dump=json` (tested with Clang 20).
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -44,7 +48,21 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-No LLVM development package or third-party JSON library is required by this prototype.
+No LLVM development package or third-party JSON library is required for the default AST JSON
+frontend. To build the experimental LibTooling frontend, install matching LLVM/Clang development
+packages and configure their CMake package directories when they are not on the default path:
+
+```bash
+cmake -S . -B build-libtooling \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCXX_DEAD_ENABLE_LIBTOOLING=ON \
+  -DLLVM_DIR=/usr/lib/llvm-20/lib/cmake/llvm \
+  -DClang_DIR=/usr/lib/llvm-20/lib/cmake/clang
+cmake --build build-libtooling -j
+ctest --test-dir build-libtooling --output-on-failure
+```
+
+The optional build links `clang-cpp`; the default remains dependency-light and selects AST JSON.
 
 ## Install
 
@@ -72,8 +90,9 @@ cmake --build build --parallel 2
 cmake --build build --target install
 ```
 
-Clang remains a runtime requirement: `cxx-dead` invokes `clang++` from `PATH` by default, or the
-executable supplied with `--clang`.
+The default AST JSON frontend requires Clang at runtime: `cxx-dead` invokes `clang++` from `PATH` by
+default, or the executable supplied with `--clang`. The optional LibTooling frontend uses the
+LLVM/Clang libraries linked into the binary instead of launching a compiler executable.
 
 ## Run
 
@@ -91,6 +110,18 @@ cxx-dead \
   --project-root . \
   --mode application
 ```
+
+An enabled LibTooling build can select direct fact extraction explicitly:
+
+```bash
+cxx-dead build/compile_commands.json \
+  --project-root . \
+  --frontend libtooling
+```
+
+`--frontend ast-json` remains the default. `--clang` applies only to that subprocess frontend.
+With `--verbose`, either frontend writes one `cxx-dead-index-metrics` line to standard error with
+translation-unit, AST/fact-byte, wall-time, peak-RSS, symbol, and edge counters.
 
 JSON output for automation:
 
@@ -136,9 +167,9 @@ declarations entirely.
 
 Run `cxx-dead --help` for all current options.
 
-For a codebase consistently contained in one namespace, Clang can avoid dumping most system
-declarations. Because the filter can exclude `main`, explicitly provide the application function it
-calls:
+For a codebase consistently contained in one namespace, either frontend can avoid materializing
+most system declaration facts. Because the filter can exclude `main`, explicitly provide the
+application function it calls:
 
 ```bash
 cxx-dead build/compile_commands.json \
@@ -171,7 +202,10 @@ locations and definition ranges while retaining the flat finding `file` and `lin
 
 The compilation database is treated as one application and every listed translation unit is assumed to be linked into it. This assumption is intentionally explicit: `compile_commands.json` describes compilation, not link membership or target relationships. For meaningful results, pass a database restricted to one executable target.
 
-Clang is invoked directly with normalized compile arguments and without a shell. Output/dependency-generation flags are removed, and AST JSON is captured in memory. Repository-provided compiler plugins or response files remain part of the trusted build input.
+AST JSON invokes Clang directly with normalized compile arguments and without a shell. LibTooling
+runs an in-process `FrontendAction` over the same compilation commands. Both remove output and
+dependency-generation flags and merge one neutral graph fact batch per translation unit.
+Repository-provided compiler plugins or response files remain part of the trusted build input.
 
 Definitions below `--project-root` participate in reachability. When `--report-path` is omitted, the
 whole project root is reportable for backward compatibility; otherwise only definitions below an
@@ -183,6 +217,8 @@ materialized lazily as opaque terminals, and excluded paths do not enter the gra
 - [Design review](docs/design-review.md) critiques the proposal and records decisions made for the prototype.
 - [Implementation plan](docs/implementation-plan.md) turns the proposal into phased, testable milestones.
 - [Architecture](docs/architecture.md) describes the current code and its replacement boundaries.
+- [LibTooling frontend decision](docs/adr/0001-libtooling-frontend.md) records the measured frontend
+  choice and compatibility tradeoffs.
 - [TermForge field trial](docs/termforge-trial.md) records real-project measurements, bugs found, and
   finding interpretation.
 - [Null Vector field trial](docs/null-vector-trial.md) covers dependency scoping, source mapping,

@@ -9,6 +9,11 @@
 
 namespace cxx_dead {
 
+enum class IndexFrontend {
+    AstJson,
+    LibTooling,
+};
+
 struct IndexOptions {
     std::filesystem::path project_root;
     std::vector<std::filesystem::path> report_paths;
@@ -22,8 +27,10 @@ struct IndexOptions {
 struct IndexResult {
     Graph graph;
     std::vector<std::string> diagnostics;
+    IndexFrontend frontend{IndexFrontend::AstJson};
     std::size_t translation_units{0};
     std::size_t ast_bytes{0};
+    std::size_t fact_bytes{0};
 };
 
 class ClangAstIndexer {
@@ -35,5 +42,18 @@ class ClangAstIndexer {
   private:
     IndexOptions options_;
 };
+
+class LibToolingIndexer {
+  public:
+    explicit LibToolingIndexer(IndexOptions options);
+
+    [[nodiscard]] IndexResult index(const std::vector<CompileCommand>& commands) const;
+
+  private:
+    IndexOptions options_;
+};
+
+[[nodiscard]] bool libtooling_available();
+[[nodiscard]] std::string_view to_string(IndexFrontend frontend);
 
 } // namespace cxx_dead

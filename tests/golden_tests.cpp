@@ -341,14 +341,16 @@ void test_golden_corpus() {
             "external-linkage header definition should merge across translation units");
     require(indexed.translation_units == 3U, "golden corpus should index three translation units");
     require(indexed.ast_bytes > 0U, "golden corpus should record emitted AST bytes");
+    require(indexed.fact_bytes > 0U, "golden corpus should record neutral fact bytes");
 
     rusage usage{};
     require(::getrusage(RUSAGE_SELF, &usage) == 0, "could not read corpus peak RSS");
     const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
     std::cout << "golden-corpus metrics: translation_units=" << indexed.translation_units
               << " ast_bytes=" << indexed.ast_bytes << " symbols=" << indexed.graph.symbols().size()
-              << " edges=" << indexed.graph.edges().size() << " findings=" << report.findings.size()
-              << " wall_ms=" << elapsed_ms << " peak_rss_kib=" << usage.ru_maxrss << '\n';
+              << " fact_bytes=" << indexed.fact_bytes << " edges=" << indexed.graph.edges().size()
+              << " findings=" << report.findings.size() << " wall_ms=" << elapsed_ms
+              << " peak_rss_kib=" << usage.ru_maxrss << '\n';
 }
 
 void test_excluded_generated_path() {

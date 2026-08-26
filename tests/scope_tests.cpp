@@ -119,8 +119,9 @@ void test_scope_separation() {
                                 .count();
     std::cout << "scope-fixture metrics: translation_units=" << indexed.translation_units
               << " ast_bytes=" << indexed.ast_bytes << " symbols=" << indexed.graph.symbols().size()
-              << " edges=" << indexed.graph.edges().size() << " findings=" << report.findings.size()
-              << " wall_ms=" << elapsed_ms << " peak_rss_kib=" << usage.ru_maxrss << '\n';
+              << " fact_bytes=" << indexed.fact_bytes << " edges=" << indexed.graph.edges().size()
+              << " findings=" << report.findings.size() << " wall_ms=" << elapsed_ms
+              << " peak_rss_kib=" << usage.ru_maxrss << '\n';
 }
 
 } // namespace

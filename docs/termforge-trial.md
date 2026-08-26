@@ -121,3 +121,19 @@ remaining extraction gaps prevent treating internal findings as deletion evidenc
    implementation.
 5. Replace DOM AST parsing with streaming LibTooling/clangd fact extraction before analyzing the
    larger neighboring repositories.
+
+## v0.5.0 frontend comparison
+
+The LibTooling prototype was compared with AST JSON on TermForge revision `6ef2825` using the same
+48-command database, `termforge` declaration filter, and `termforge::forge_top::run_cli` root.
+
+| Frontend | Wall time | Peak RSS | AST bytes | Fact bytes | Defined / graph symbols | Edges | Findings |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| AST JSON | 67.6 s | 274.1 MiB | 528,097,142 | 4,954,584 | 1,645 / 1,701 | 3,321 | 595 |
+| LibTooling | 51.8 s | 275.1 MiB | 0 | 4,990,166 | 1,646 / 1,706 | 3,173 | 607 |
+
+The direct frontend removed the 528 MB intermediate stream and improved wall time by about 23%; the
+filtered workload's peak RSS was effectively unchanged. LibTooling's finding set contains all 595
+AST JSON candidates plus 12 additional functions, primarily template-adjacent helpers and lambdas.
+Golden and scope fixtures remain exact parity gates, but neither TermForge set is deletion evidence
+and the larger LibTooling count is not treated as a precision claim.

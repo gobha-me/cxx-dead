@@ -246,6 +246,18 @@ void test_clang_integration() {
             "configured root did not retain command-line evidence");
 }
 
+void test_libtooling_availability_contract() {
+    if (cxx_dead::libtooling_available())
+        return;
+    try {
+        static_cast<void>(cxx_dead::LibToolingIndexer({.project_root = "."}).index({}));
+        throw std::runtime_error("unavailable LibTooling frontend unexpectedly ran");
+    } catch (const std::exception& error) {
+        require(std::string(error.what()).contains("CXX_DEAD_ENABLE_LIBTOOLING=ON"),
+                "unavailable LibTooling frontend has no actionable diagnostic");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -254,6 +266,7 @@ int main() {
         test_shell_split();
         test_graph_algorithms();
         test_clang_integration();
+        test_libtooling_availability_contract();
         std::cout << "all cxx-dead tests passed\n";
         return 0;
     } catch (const std::exception& error) {

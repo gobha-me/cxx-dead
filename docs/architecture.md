@@ -4,10 +4,12 @@
 compile_commands.json
         |
         v
-command normalization ----> clang++ -ast-dump=json
-                                  |
-                                  v
-                         per-TU AST facts
+command normalization ----> AST JSON subprocess ----+
+        |                                            |
+        +----------------> LibTooling action --------+
+                                                     |
+                                                     v
+                                           per-TU neutral facts
                                   |
                     +-------------+-------------+
                     |                           |
@@ -39,13 +41,18 @@ command normalization ----> clang++ -ast-dump=json
   override edges. It assigns reportable, indexed, external-opaque, or excluded scope from configured
   path boundaries, reconstructs compressed Clang source locations from byte offsets, preserves
   spelling and macro-expansion extents, and materializes opaque references lazily.
+- `libtooling_indexer` runs a `FrontendAction` and `RecursiveASTVisitor` over the same compilation
+  commands and emits the same neutral facts directly. It is compiled only when
+  `CXX_DEAD_ENABLE_LIBTOOLING=ON`.
 - `graph` merges symbols, stores typed roots, edges, and escapes with structured evidence, traverses
   live edges, and computes unreachable SCCs.
 - `report` applies typed evidence classifications and writes terminal or schema-versioned JSON
   evidence chains.
 - `json` is a small standards-oriented parser/escaper used for both Clang and compilation database input, avoiding a prototype package dependency.
 
-The graph module has no Clang dependency. A scalable frontend can replace `ClangAstIndexer` while retaining analysis and reporting tests.
+Each translation unit is merged as a separate neutral graph fact batch, so neither frontend needs
+to retain all frontend documents at once. The graph and report semantics remain Clang-independent;
+the parity suite requires identical golden and scope reports from both frontends.
 
 ## Symbol scope
 
@@ -78,10 +85,11 @@ Each root records its typed kind, provider, and reason. Traversable edges retain
 evidence, while address-taking is stored separately as an escape fact with its originating symbol
 when known. Classification uses these enums and relationships; reasons are presentation metadata.
 
-An experimental `--ast-filter` passes Clang's declaration-name filter through to the AST dumper.
-Filtered output can contain multiple consecutive JSON documents; the indexer splits and merges them
-per translation unit. Since filtering can exclude `main`, a matching manual root is required unless
-another root remains.
+An experimental `--ast-filter` limits declaration facts in both frontends. Filtered AST JSON can
+contain multiple consecutive documents; the indexer splits and merges them per translation unit.
+LibTooling applies the predicate before source and identity extraction and omits filtered external
+terminals. Since filtering can exclude `main`, a matching manual root is required unless another
+root remains.
 
 ## Identity
 
@@ -103,7 +111,9 @@ findings, while terminal labels include signatures so overloads remain unambiguo
 
 ## Failure model
 
-The index is all-or-nothing. A nonzero Clang result or malformed AST aborts analysis with exit status 1. This avoids presenting an incomplete graph as evidence of deadness.
+The index is all-or-nothing. A nonzero subprocess result, malformed AST JSON, or failed LibTooling
+action aborts analysis with exit status 1. This avoids presenting an incomplete graph as evidence
+of deadness.
 
 ## Run states
 

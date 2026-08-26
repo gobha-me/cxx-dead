@@ -114,3 +114,18 @@ repeatable `--report-path` values select owned definitions eligible for findings
 Vector rerun, use `include/` and `src/` as report paths while retaining the linked TermForge sources
 inside the indexed workspace. The reduced framework fixture covers the callback-to-application
 virtual-dispatch cascade; a target-aware rerun remains dependent on explicit link membership.
+
+## v0.5.0 frontend comparison
+
+The direct frontend was compared with AST JSON on Null Vector revision `0786d15`, selecting the same
+nine source translation units and excluding the build tree.
+
+| Frontend | Wall time | Peak RSS | AST bytes | Fact bytes | Defined / graph symbols | Edges | Findings |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| AST JSON | 128.1 s | 3.52 GiB | 5,025,849,020 | 680,475 | 123 / 642 | 470 | 44 |
+| LibTooling | 8.0 s | 225.6 MiB | 0 | 1,477,703 | 123 / 1,306 | 882 | 44 |
+
+LibTooling reduced wall time by about 94% and peak RSS by about 94%, while retaining the same 123
+definitions, 79 reachable definitions, and 44 findings. It materializes more referenced external
+terminals and edges directly from Clang's AST, explaining the larger neutral fact payload without a
+reportable-result change. The known framework callback cascade remains advisory.

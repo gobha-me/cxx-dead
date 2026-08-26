@@ -241,8 +241,8 @@ void test_clang_integration() {
     const auto report_json = cxx_dead::json::parse(json_output.str());
     require(report_json.find("findings") != nullptr, "JSON report has no findings field");
     require(report_json.find("schema_version") != nullptr &&
-                report_json.find("schema_version")->as_number() == 5.0,
-            "JSON report does not use stable-identity schema version 5");
+                report_json.find("schema_version")->as_number() == 6.0,
+            "JSON report does not use analysis-context schema version 6");
     require(report_json.find("roots") != nullptr && report_json.find("roots")->is_array(),
             "JSON report has no structured roots field");
 
@@ -254,7 +254,7 @@ void test_clang_integration() {
                                    indexed.diagnostics);
     const auto artifact_json = cxx_dead::json::parse(artifact_output.str());
     require(artifact_json.find("artifact_schema_version") != nullptr &&
-                artifact_json.find("artifact_schema_version")->as_number() == 1.0 &&
+                artifact_json.find("artifact_schema_version")->as_number() == 2.0 &&
                 artifact_json.find("identity_schema_version") != nullptr &&
                 artifact_json.find("identity_schema_version")->as_number() == 1.0,
             "graph artifact schema versions are missing or coupled to the report schema");

@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "source_root": "@TARGET_FIXTURE_SOURCE@",
+  "build_root": "@TARGET_FIXTURE_BUILD@",
+  "configurations": [
+    {
+      "name": "Debug",
+      "targets": [
+        {
+          "id": "objects",
+          "name": "objects",
+          "type": "object_library",
+          "sources": ["objects.cpp"],
+          "dependencies": []
+        },
+        {
+          "id": "core",
+          "name": "core",
+          "type": "static_library",
+          "sources": ["core.cpp"],
+          "dependencies": ["objects"]
+        },
+        {
+          "id": "shared",
+          "name": "shared",
+          "type": "shared_library",
+          "sources": ["shared.cpp"],
+          "dependencies": []
+        },
+        {
+          "id": "production_app",
+          "name": "production_app",
+          "type": "executable",
+          "sources": ["production.cpp"],
+          "dependencies": ["core", "shared"],
+          "artifacts": ["production_app"]
+        },
+        {
+          "id": "test_app",
+          "name": "test_app",
+          "type": "executable",
+          "sources": ["test.cpp"],
+          "dependencies": ["core"]
+        }
+      ]
+    }
+  ]
+}

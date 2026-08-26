@@ -244,7 +244,21 @@ std::string_view to_string(FindingEvidenceKind kind) {
 
 void write_human_report(std::ostream& output, const Graph& graph,
                         const ReachabilityResult& reachability, const AnalysisReport& report,
-                        const std::vector<std::string>& diagnostics) {
+                        const std::vector<std::string>& diagnostics,
+                        const AnalysisMetadata& metadata) {
+    if (metadata.mode == "target") {
+        output << "Analysis target: " << metadata.target_name << " (" << metadata.target_kind
+               << ")\n"
+               << "Configuration: " << metadata.configuration << " [" << metadata.configuration_id
+               << "]\n"
+               << "Target closure: ";
+        for (std::size_t index = 0; index < metadata.closure_targets.size(); ++index) {
+            if (index != 0)
+                output << ", ";
+            output << metadata.closure_targets[index];
+        }
+        output << "\n\n";
+    }
     output << "cxx-dead application reachability report\n\n"
            << "SUMMARY\n"
            << "  Graph symbols by scope:    " << report.reportable_symbols << " reportable, "
@@ -328,7 +342,8 @@ void write_human_report(std::ostream& output, const Graph& graph,
 
 void write_json_report(std::ostream& output, const Graph& graph,
                        const ReachabilityResult& reachability, const AnalysisReport& report,
-                       const std::vector<std::string>& diagnostics) {
+                       const std::vector<std::string>& diagnostics,
+                       const AnalysisMetadata& metadata) {
     std::vector<int> component_by_symbol(graph.symbols().size(), -1);
     for (std::size_t component = 0; component < reachability.unreachable_sccs.size(); ++component) {
         for (const auto symbol : reachability.unreachable_sccs[component]) {
@@ -338,7 +353,32 @@ void write_json_report(std::ostream& output, const Graph& graph,
 
     output << "{\n"
            << "  \"schema_version\": " << report_schema_version << ",\n"
-           << "  \"mode\": \"application\",\n"
+           << "  \"mode\": \"" << json::escape(metadata.mode) << "\",\n"
+           << "  \"analysis_context\": {\n"
+           << "    \"configuration_id\": \"" << json::escape(metadata.configuration_id) << "\",\n"
+           << "    \"configuration\": \"" << json::escape(metadata.configuration) << "\",\n"
+           << "    \"target_id\": ";
+    if (metadata.target_id.empty())
+        output << "null";
+    else
+        output << '"' << json::escape(metadata.target_id) << '"';
+    output << ",\n    \"target_name\": ";
+    if (metadata.target_name.empty())
+        output << "null";
+    else
+        output << '"' << json::escape(metadata.target_name) << '"';
+    output << ",\n    \"target_kind\": ";
+    if (metadata.target_kind.empty())
+        output << "null";
+    else
+        output << '"' << json::escape(metadata.target_kind) << '"';
+    output << ",\n    \"closure_targets\": [";
+    for (std::size_t index = 0; index < metadata.closure_targets.size(); ++index) {
+        if (index != 0)
+            output << ", ";
+        output << '"' << json::escape(metadata.closure_targets[index]) << '"';
+    }
+    output << "]\n  },\n"
            << "  \"summary\": {\n"
            << "    \"defined_symbols\": " << report.defined_symbols << ",\n"
            << "    \"reachable_symbols\": " << report.reachable_symbols << ",\n"

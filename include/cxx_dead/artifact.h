@@ -9,11 +9,16 @@
 
 namespace cxx_dead {
 
-inline constexpr int graph_artifact_schema_version = 1;
+inline constexpr int graph_artifact_schema_version = 2;
 inline constexpr int symbol_identity_schema_version = 1;
 
 struct GraphArtifactMetadata {
     std::string configuration_id{"default"};
+    std::string configuration;
+    std::string target_id;
+    std::string target_name;
+    std::string target_kind;
+    std::vector<std::string> closure_targets;
     IndexFrontend frontend{IndexFrontend::AstJson};
     std::size_t translation_units{0};
 };

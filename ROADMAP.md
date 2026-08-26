@@ -28,6 +28,9 @@ without precision regressions.
 
 ## M3 — Target-aware workspaces
 
+Status: v0.7.0 provides target-scoped CMake File API and explicit-manifest analysis for one selected
+configuration and target per run. Workspace aggregation and richer target policy remain open.
+
 - Ingest the CMake File API and provide an explicit target manifest fallback.
 - Model executable, object-library, static-library, and shared-library membership.
 - Distinguish production, test, and tool reachability policies.

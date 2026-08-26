@@ -105,6 +105,12 @@ std::vector<CompileCommand> load_compilation_database(const std::filesystem::pat
             command.file = command.directory / command.file;
         }
         command.file = std::filesystem::weakly_canonical(command.file);
+        command.output = item.string_or("output");
+        if (!command.output.empty()) {
+            if (command.output.is_relative())
+                command.output = command.directory / command.output;
+            command.output = std::filesystem::absolute(command.output).lexically_normal();
+        }
 
         if (const auto* arguments = item.find("arguments"); arguments != nullptr) {
             if (!arguments->is_array()) {

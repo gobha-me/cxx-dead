@@ -110,6 +110,29 @@ void write_graph_artifact(std::ostream& output, const Graph& graph,
            << "  \"artifact_schema_version\": " << graph_artifact_schema_version << ",\n"
            << "  \"identity_schema_version\": " << symbol_identity_schema_version << ",\n"
            << "  \"configuration_id\": \"" << json::escape(metadata.configuration_id) << "\",\n"
+           << "  \"analysis_context\": {\"configuration\": \""
+           << json::escape(metadata.configuration) << "\", \"target_id\": ";
+    if (metadata.target_id.empty())
+        output << "null";
+    else
+        output << '"' << json::escape(metadata.target_id) << '"';
+    output << ", \"target_name\": ";
+    if (metadata.target_name.empty())
+        output << "null";
+    else
+        output << '"' << json::escape(metadata.target_name) << '"';
+    output << ", \"target_kind\": ";
+    if (metadata.target_kind.empty())
+        output << "null";
+    else
+        output << '"' << json::escape(metadata.target_kind) << '"';
+    output << ", \"closure_targets\": [";
+    for (std::size_t index = 0; index < metadata.closure_targets.size(); ++index) {
+        if (index != 0)
+            output << ", ";
+        output << '"' << json::escape(metadata.closure_targets[index]) << '"';
+    }
+    output << "]},\n"
            << "  \"frontend\": \"" << to_string(metadata.frontend) << "\",\n"
            << "  \"translation_units\": " << metadata.translation_units << ",\n"
            << "  \"symbols\": [";

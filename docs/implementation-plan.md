@@ -77,6 +77,11 @@ Gate: analyze a one-million-line application within an agreed CI budget, with in
 
 ## Milestone 3 — target-aware application model
 
+Status: v0.7.0 adds the initial CMake File API adapter, explicit JSON manifest fallback,
+configuration/target selection, target-scoped command filtering, and executable/object/static/shared
+library fixture coverage. Multi-configuration aggregation and richer workspace-wide policy remain
+follow-up work.
+
 Goal: stop treating the compilation database as a link graph.
 
 Deliverables:
@@ -164,6 +169,6 @@ For the next implementation cycle:
 2. Add unreachable weak-component aggregation.
 3. Prototype a LibTooling fact collector and benchmark it against AST JSON (completed in v0.5.0).
 4. Define stable graph artifact and JSON schemas (completed in v0.6.0).
-5. Add CMake File API target ingestion.
+5. Add CMake File API target ingestion (completed in v0.7.0).
 
 Do not start library inference or baseline CI policy until target identity and index completeness are reliable.

@@ -279,8 +279,8 @@ void test_golden_corpus() {
                                 indexed.diagnostics);
     const auto report_json = cxx_dead::json::parse(json_output.str());
     require(report_json.find("schema_version") != nullptr &&
-                report_json.find("schema_version")->as_number() == 5.0,
-            "golden JSON report should use schema version 5");
+                report_json.find("schema_version")->as_number() == 6.0,
+            "golden JSON report should use schema version 6");
     require(report_json.find("roots") != nullptr &&
                 report_json.find("roots")->as_array().size() >= 2U,
             "golden JSON report should expose structured root evidence");

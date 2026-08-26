@@ -10,7 +10,17 @@
 
 namespace cxx_dead {
 
-inline constexpr int report_schema_version = 5;
+inline constexpr int report_schema_version = 6;
+
+struct AnalysisMetadata {
+    std::string mode{"application"};
+    std::string configuration_id{"default"};
+    std::string configuration;
+    std::string target_id;
+    std::string target_name;
+    std::string target_kind;
+    std::vector<std::string> closure_targets;
+};
 
 enum class Classification {
     Dead,
@@ -55,9 +65,11 @@ struct AnalysisReport {
 [[nodiscard]] std::string_view to_string(FindingEvidenceKind kind);
 void write_human_report(std::ostream& output, const Graph& graph,
                         const ReachabilityResult& reachability, const AnalysisReport& report,
-                        const std::vector<std::string>& diagnostics);
+                        const std::vector<std::string>& diagnostics,
+                        const AnalysisMetadata& metadata = {});
 void write_json_report(std::ostream& output, const Graph& graph,
                        const ReachabilityResult& reachability, const AnalysisReport& report,
-                       const std::vector<std::string>& diagnostics);
+                       const std::vector<std::string>& diagnostics,
+                       const AnalysisMetadata& metadata = {});
 
 } // namespace cxx_dead

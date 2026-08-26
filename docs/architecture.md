@@ -3,8 +3,10 @@
 ```text
 compile_commands.json
         |
-        v
-command normalization ----> AST JSON subprocess ----+
+        +---- build model (optional CMake/manifest) ----> target command selection
+        |                                                |
+        v                                                v
+command normalization ---------------------------> AST JSON subprocess ----+
         |                                            |
         +----------------> LibTooling action --------+
                                                      |
@@ -35,6 +37,8 @@ command normalization ----> AST JSON subprocess ----+
 ## Modules
 
 - `compile_database` parses both `arguments` and shell-quoted `command` entries.
+- `build_model` parses CMake File API codemodel-v2 replies or schema-versioned explicit manifests,
+  resolves a selected target's link closure, and maps its C++ sources back to compile commands.
 - `process` runs Clang directly with `fork`/`execvp`, captures stdout/stderr concurrently, and never evaluates compile commands through a shell.
 - `indexer` converts Clang AST JSON into declarations, provider-attributed calls,
   construction/destruction edges, address escapes, roots, record inheritance, and conservative
@@ -125,9 +129,9 @@ the expansion extent is primary when present and spelling is primary otherwise.
 
 Clang omits repeated file and line fields in nested JSON nodes. The indexer resolves those omissions
 from traversal context and a cached per-file byte-offset line map rather than emitting line zero.
-JSON report schema version 5 exposes stable keys; version 4 introduced the spelling extent and a
-nullable expansion extent on roots and findings. Graph artifact schema 1 and identity schema 1 are
-versioned independently from report JSON.
+JSON report schema version 6 adds analysis configuration and target context; version 5 exposed stable
+keys, while version 4 introduced spelling and expansion extents. Graph artifact schema 2 adds the
+same target context. Identity schema 1 remains independently versioned.
 
 ## Failure model
 

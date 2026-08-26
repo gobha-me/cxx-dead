@@ -11,6 +11,7 @@ struct CompileCommand {
     std::filesystem::path directory;
     std::filesystem::path file;
     std::vector<std::string> arguments;
+    std::filesystem::path output;
 };
 
 [[nodiscard]] std::vector<std::string> split_shell_command(std::string_view command);

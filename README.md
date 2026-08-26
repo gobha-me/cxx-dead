@@ -22,11 +22,13 @@ The prototype already handles:
 - separate reachability and reporting scopes for framework-aware analysis;
 - optional direct LibTooling fact extraction without full JSON AST materialization;
 - configuration-aware stable symbol identities and deterministic graph artifacts;
+- target-scoped analysis from CMake File API or explicit manifest metadata;
 - human and versioned JSON output;
 - complete display signatures and exact spelling/expansion source extents.
 
-It does not yet reconstruct linker targets, infer library APIs, model arbitrary registration/plugin
-systems, jointly analyze multiple build configurations, or incrementally cache translation-unit facts.
+It does not yet infer library APIs, exactly model static-archive member extraction, model arbitrary
+registration/plugin systems, jointly analyze multiple build configurations in one report, or
+incrementally cache translation-unit facts.
 Findings are candidates for review, not deletion instructions.
 
 ## Development status
@@ -111,6 +113,26 @@ cxx-dead \
   --project-root . \
   --mode application
 ```
+
+For a build containing more than one executable or library, request CMake's codemodel before
+configuring and select one target explicitly:
+
+```bash
+cmake -E make_directory build/.cmake/api/v1/query
+cmake -E touch build/.cmake/api/v1/query/codemodel-v2
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+cxx-dead \
+  --cmake-build-dir build \
+  --configuration Debug \
+  --target my_app \
+  --format json
+```
+
+The selected executable and its transitive object, static, shared, and module-library dependencies
+are analyzed without indexing sibling executables or tests. If the codemodel has one configuration
+and one executable, both selections are automatic. Ambiguous configurations or targets fail with
+an instruction to select one; the tool never silently combines them. See the
+[target model](docs/target-model.md) for the manifest fallback and link-semantics contract.
 
 An enabled LibTooling build can select direct fact extraction explicitly:
 
@@ -212,15 +234,18 @@ The numeric confidence values in JSON are provisional presentation values, not s
 
 Every classification is backed by an ordered evidence chain. Root, edge, and escape facts retain a
 provider and human-readable reason, while analysis decisions use typed facts rather than matching
-those presentation strings. JSON report schema version 5 changes `key` to a configuration-aware
-stable symbol ID. Version 4 added complete signatures and spelling/expansion locations and
-definition ranges while retaining the flat finding `file` and `line` fields. Graph artifacts use a
-separate artifact schema version 1 and identity schema version 1; those versions do not advance with
-the report schema.
+those presentation strings. JSON report schema version 6 adds an explicit application/target
+analysis context; version 5 changed `key` to a configuration-aware stable symbol ID. Version 4 added
+complete signatures and spelling/expansion locations and definition ranges while retaining the flat
+finding `file` and `line` fields. Graph artifact schema version 2 adds the matching target context;
+identity schema version 1 is unchanged and remains independent from the report schema.
 
 ## Current analysis contract
 
-The compilation database is treated as one application and every listed translation unit is assumed to be linked into it. This assumption is intentionally explicit: `compile_commands.json` describes compilation, not link membership or target relationships. For meaningful results, pass a database restricted to one executable target.
+Without build metadata, the compilation database is treated as one application and every listed
+translation unit is assumed to be linked into it. With `--cmake-build-dir` or `--target-manifest`,
+only the selected target's transitive link closure is indexed. Target mode records the selected
+configuration, target id/name/kind, and closure in human, JSON, and graph-artifact output.
 
 AST JSON invokes Clang directly with normalized compile arguments and without a shell. LibTooling
 runs an in-process `FrontendAction` over the same compilation commands. Both remove output and
@@ -237,6 +262,8 @@ materialized lazily as opaque terminals, and excluded paths do not enter the gra
 - [Design review](docs/design-review.md) critiques the proposal and records decisions made for the prototype.
 - [Implementation plan](docs/implementation-plan.md) turns the proposal into phased, testable milestones.
 - [Architecture](docs/architecture.md) describes the current code and its replacement boundaries.
+- [Target model](docs/target-model.md) defines CMake ingestion, manifest fallback, and target-kind
+  semantics.
 - [LibTooling frontend decision](docs/adr/0001-libtooling-frontend.md) records the measured frontend
   choice and compatibility tradeoffs.
 - [TermForge field trial](docs/termforge-trial.md) records real-project measurements, bugs found, and

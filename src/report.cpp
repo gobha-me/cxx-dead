@@ -337,7 +337,7 @@ void write_json_report(std::ostream& output, const Graph& graph,
     }
 
     output << "{\n"
-           << "  \"schema_version\": 4,\n"
+           << "  \"schema_version\": " << report_schema_version << ",\n"
            << "  \"mode\": \"application\",\n"
            << "  \"summary\": {\n"
            << "    \"defined_symbols\": " << report.defined_symbols << ",\n"

@@ -43,6 +43,22 @@ enum class EscapeKind {
     AddressTaken,
 };
 
+enum class IdentityQuality {
+    Stable,
+    Fallback,
+};
+
+struct SymbolIdentity {
+    std::string configuration_id{"default"};
+    std::string usr;
+    std::string linkage_name;
+    std::string translation_unit;
+    std::string fallback_anchor;
+    IdentityQuality quality{IdentityQuality::Fallback};
+
+    bool operator==(const SymbolIdentity&) const = default;
+};
+
 struct Evidence {
     std::string provider;
     std::string reason;
@@ -71,6 +87,7 @@ struct SymbolSource {
 
 struct Symbol {
     std::string key;
+    SymbolIdentity identity;
     std::string name;
     std::string qualified_name;
     std::string class_name;
@@ -110,7 +127,7 @@ class Graph {
     void add_root(SymbolId id, RootKind kind, Evidence evidence);
     void add_escape(SymbolId id, EscapeKind kind, Evidence evidence,
                     std::optional<SymbolId> from = std::nullopt);
-    void sort_roots();
+    void canonicalize();
 
     [[nodiscard]] std::optional<SymbolId> find_by_key(std::string_view key) const;
     [[nodiscard]] const std::vector<Symbol>& symbols() const {
@@ -146,6 +163,11 @@ struct ReachabilityResult {
 [[nodiscard]] bool has_indexed_body(SymbolScope scope);
 [[nodiscard]] bool is_reportable(SymbolScope scope);
 [[nodiscard]] const SourceExtent& primary_source_extent(const Symbol& symbol);
+[[nodiscard]] SymbolIdentity make_symbol_identity(std::string configuration_id, std::string usr,
+                                                  std::string linkage_name,
+                                                  std::string translation_unit,
+                                                  std::string fallback_anchor);
+[[nodiscard]] std::string stable_symbol_key(const SymbolIdentity& identity);
 void merge_graph(Graph& destination, const Graph& source);
 [[nodiscard]] std::size_t graph_fact_bytes(const Graph& graph);
 [[nodiscard]] ReachabilityResult analyze_reachability(const Graph& graph);
@@ -154,5 +176,6 @@ void merge_graph(Graph& destination, const Graph& source);
 [[nodiscard]] std::string_view to_string(EdgeKind kind);
 [[nodiscard]] std::string_view to_string(RootKind kind);
 [[nodiscard]] std::string_view to_string(EscapeKind kind);
+[[nodiscard]] std::string_view to_string(IdentityQuality quality);
 
 } // namespace cxx_dead

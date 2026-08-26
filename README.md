@@ -21,11 +21,12 @@ The prototype already handles:
 - structured root, graph-edge, escape, and classification evidence;
 - separate reachability and reporting scopes for framework-aware analysis;
 - optional direct LibTooling fact extraction without full JSON AST materialization;
+- configuration-aware stable symbol identities and deterministic graph artifacts;
 - human and versioned JSON output;
 - complete display signatures and exact spelling/expansion source extents.
 
 It does not yet reconstruct linker targets, infer library APIs, model arbitrary registration/plugin
-systems, analyze multiple build configurations, or incrementally cache translation-unit facts.
+systems, jointly analyze multiple build configurations, or incrementally cache translation-unit facts.
 Findings are candidates for review, not deletion instructions.
 
 ## Development status
@@ -132,6 +133,23 @@ cxx-dead build/compile_commands.json \
   --output cxx-dead.json
 ```
 
+Write a deterministic, independently versioned graph artifact for later comparison or indexing
+work. Give each separately analyzed build configuration a durable identifier:
+
+```bash
+cxx-dead build/compile_commands.json \
+  --project-root . \
+  --configuration-id linux-debug \
+  --format json \
+  --output cxx-dead.json \
+  --graph-output cxx-dead.graph.json
+```
+
+`--configuration-id` defaults to `default`. It participates in every stable symbol ID, so use the
+same value for comparable runs and distinct values for configurations whose declarations may
+differ. The graph artifact records symbols, typed edges, roots, escapes, source extents, identity
+quality, and diagnostics. Artifact ingestion and cache reuse are not implemented yet.
+
 Additional roots and CI behavior:
 
 ```bash
@@ -194,9 +212,11 @@ The numeric confidence values in JSON are provisional presentation values, not s
 
 Every classification is backed by an ordered evidence chain. Root, edge, and escape facts retain a
 provider and human-readable reason, while analysis decisions use typed facts rather than matching
-those presentation strings. JSON schema version 4 adds complete signatures and spelling/expansion
-locations and definition ranges while retaining the flat finding `file` and `line` fields. Version
-3 introduced symbol scope counts and root/finding scope; version 2 introduced structured evidence.
+those presentation strings. JSON report schema version 5 changes `key` to a configuration-aware
+stable symbol ID. Version 4 added complete signatures and spelling/expansion locations and
+definition ranges while retaining the flat finding `file` and `line` fields. Graph artifacts use a
+separate artifact schema version 1 and identity schema version 1; those versions do not advance with
+the report schema.
 
 ## Current analysis contract
 

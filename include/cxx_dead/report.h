@@ -10,6 +10,8 @@
 
 namespace cxx_dead {
 
+inline constexpr int report_schema_version = 5;
+
 enum class Classification {
     Dead,
     LikelyDead,

@@ -23,7 +23,8 @@ dependency-light default while the direct collector is experimental.
 
 Both frontends emit a per-translation-unit neutral `Graph` fact batch and use the same merger,
 manual-root processing, traversal, classification, and reporting. The measurement-only fact byte
-count is not a durable artifact schema; stable identity and persistence remain issue #15 work.
+count is not itself a durable artifact schema. Version 0.6.0 adds the stable identity and graph
+artifact contract; per-TU persistence and invalidation remain follow-up work.
 
 ## Evidence and consequences
 

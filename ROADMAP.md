@@ -18,7 +18,8 @@ dead, and every high-confidence finding has a useful explanation.
 
 - Promote the measured LibTooling prototype from its optional frontend into the scalable indexing
   path without removing the dependency-light AST JSON fallback.
-- Introduce stable cross-translation-unit symbol identities.
+- Maintain the v0.6.0 configuration-aware cross-translation-unit identities and graph artifact
+  schema as compatibility contracts.
 - Store deterministic per-TU facts with command/content hashing.
 - Add bounded parallelism, incremental invalidation, and resource telemetry.
 

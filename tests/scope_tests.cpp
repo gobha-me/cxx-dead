@@ -95,9 +95,9 @@ void test_scope_separation() {
     const auto json_report = cxx_dead::json::parse(json_output.str());
     const auto* summary = json_report.find("summary");
     const auto* scope_counts = summary == nullptr ? nullptr : summary->find("scope_counts");
-    require(json_report.find("schema_version")->as_number() == 4.0 && scope_counts != nullptr &&
+    require(json_report.find("schema_version")->as_number() == 5.0 && scope_counts != nullptr &&
                 scope_counts->find("indexed")->as_number() >= 2.0,
-            "JSON report does not expose schema-v4 scope counts");
+            "JSON report does not expose stable-identity scope counts");
     const auto& findings = json_report.find("findings")->as_array();
     require(findings.size() == 1U && findings.front().string_or("scope") == "reportable",
             "JSON finding does not identify report ownership");

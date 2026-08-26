@@ -39,7 +39,7 @@ std::string report_json(const cxx_dead::IndexResult& indexed) {
     const auto reachability = cxx_dead::analyze_reachability(indexed.graph);
     const auto report = cxx_dead::build_report(indexed.graph, reachability);
     std::ostringstream output;
-    cxx_dead::write_json_report(output, indexed.graph, reachability, report, indexed.diagnostics);
+    cxx_dead::write_json_report(output, indexed.graph, reachability, report, {});
     return output.str();
 }
 
@@ -61,6 +61,21 @@ void test_golden_frontend_parity() {
     require(tooling.ast_bytes == 0U && tooling.fact_bytes > 0U && ast.ast_bytes > 0U &&
                 ast.fact_bytes > 0U,
             "frontend byte metrics are incomplete");
+    require(std::ranges::any_of(tooling.graph.symbols(),
+                                [](const cxx_dead::Symbol& symbol) {
+                                    return symbol.identity.linkage_name.empty() &&
+                                           !symbol.identity.usr.empty() &&
+                                           symbol.identity.quality ==
+                                               cxx_dead::IdentityQuality::Stable;
+                                }),
+            "LibTooling did not use a Clang USR for an unmangled declaration");
+    const auto lambda =
+        std::ranges::find_if(tooling.graph.symbols(), [](const cxx_dead::Symbol& symbol) {
+            return symbol.defined && symbol.qualified_name.ends_with("operator()") &&
+                   symbol.signature == "int (int) const";
+        });
+    require(lambda != tooling.graph.symbols().end() && !lambda->identity.translation_unit.empty(),
+            "LibTooling lambda identity is not translation-unit scoped");
 }
 
 void test_filtered_frontend_parity() {

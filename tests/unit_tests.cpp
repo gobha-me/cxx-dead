@@ -1,3 +1,4 @@
+#include "cxx_dead/artifact.h"
 #include "cxx_dead/compile_database.h"
 #include "cxx_dead/graph.h"
 #include "cxx_dead/indexer.h"
@@ -159,6 +160,32 @@ void test_graph_algorithms() {
             "classification did not retain the specific escape evidence");
 }
 
+void test_stable_identity_contract() {
+    const auto external =
+        cxx_dead::make_symbol_identity("debug", "c:@F@run#", "_Z3runv", "", "src/run.cpp:12");
+    const auto external_other_source =
+        cxx_dead::make_symbol_identity("debug", "c:@F@run#", "_Z3runv", "", "include/run.hpp:4");
+    const auto other_configuration =
+        cxx_dead::make_symbol_identity("release", "c:@F@run#", "_Z3runv", "", "src/run.cpp:12");
+    const auto internal_a =
+        cxx_dead::make_symbol_identity("debug", "", "_ZL6helperv", "src/a.cpp", "src/a.cpp:20");
+    const auto internal_b =
+        cxx_dead::make_symbol_identity("debug", "", "_ZL6helperv", "src/b.cpp", "src/b.cpp:20");
+    const auto fallback = cxx_dead::make_symbol_identity("debug", "", "", "src/a.cpp",
+                                                         "anonymous|void ()|src/a.cpp:20");
+
+    require(cxx_dead::stable_symbol_key(external) ==
+                cxx_dead::stable_symbol_key(external_other_source),
+            "external identity depends on a declaration source location");
+    require(cxx_dead::stable_symbol_key(external) !=
+                cxx_dead::stable_symbol_key(other_configuration),
+            "configuration identity did not disambiguate an external symbol");
+    require(cxx_dead::stable_symbol_key(internal_a) != cxx_dead::stable_symbol_key(internal_b),
+            "translation-unit identity did not disambiguate internal linkage");
+    require(fallback.quality == cxx_dead::IdentityQuality::Fallback,
+            "unsupported identity did not retain fallback quality");
+}
+
 void test_clang_integration() {
     const auto fixture = std::filesystem::path(CXX_DEAD_FIXTURE_DIR);
     std::vector<cxx_dead::CompileCommand> commands;
@@ -214,10 +241,59 @@ void test_clang_integration() {
     const auto report_json = cxx_dead::json::parse(json_output.str());
     require(report_json.find("findings") != nullptr, "JSON report has no findings field");
     require(report_json.find("schema_version") != nullptr &&
-                report_json.find("schema_version")->as_number() == 4.0,
-            "JSON report does not use source-mapping schema version 4");
+                report_json.find("schema_version")->as_number() == 5.0,
+            "JSON report does not use stable-identity schema version 5");
     require(report_json.find("roots") != nullptr && report_json.find("roots")->is_array(),
             "JSON report has no structured roots field");
+
+    std::ostringstream artifact_output;
+    cxx_dead::write_graph_artifact(artifact_output, indexed.graph,
+                                   {.configuration_id = "default",
+                                    .frontend = indexed.frontend,
+                                    .translation_units = indexed.translation_units},
+                                   indexed.diagnostics);
+    const auto artifact_json = cxx_dead::json::parse(artifact_output.str());
+    require(artifact_json.find("artifact_schema_version") != nullptr &&
+                artifact_json.find("artifact_schema_version")->as_number() == 1.0 &&
+                artifact_json.find("identity_schema_version") != nullptr &&
+                artifact_json.find("identity_schema_version")->as_number() == 1.0,
+            "graph artifact schema versions are missing or coupled to the report schema");
+    require(artifact_json.find("symbols") != nullptr && artifact_json.find("symbols")->is_array() &&
+                artifact_json.find("edges") != nullptr && artifact_json.find("edges")->is_array(),
+            "graph artifact does not contain symbol and edge facts");
+
+    auto reversed_commands = commands;
+    std::ranges::reverse(reversed_commands);
+    const auto reversed = indexer.index(reversed_commands);
+    std::ostringstream reversed_artifact_output;
+    cxx_dead::write_graph_artifact(reversed_artifact_output, reversed.graph,
+                                   {.configuration_id = "default",
+                                    .frontend = reversed.frontend,
+                                    .translation_units = reversed.translation_units},
+                                   reversed.diagnostics);
+    require(artifact_output.str() == reversed_artifact_output.str(),
+            "graph artifact depends on translation-unit ordering");
+    const auto reversed_reachability = cxx_dead::analyze_reachability(reversed.graph);
+    const auto reversed_report = cxx_dead::build_report(reversed.graph, reversed_reachability);
+    std::ostringstream reversed_report_output;
+    cxx_dead::write_json_report(reversed_report_output, reversed.graph, reversed_reachability,
+                                reversed_report, reversed.diagnostics);
+    require(json_output.str() == reversed_report_output.str(),
+            "JSON report depends on translation-unit ordering");
+
+    const auto release_indexed =
+        cxx_dead::ClangAstIndexer({.project_root = fixture, .configuration_id = "release"})
+            .index(commands);
+    const auto default_live = find_symbol(indexed.graph, "live::run");
+    const auto release_live = find_symbol(release_indexed.graph, "live::run");
+    require(indexed.graph.symbols()[default_live].key !=
+                release_indexed.graph.symbols()[release_live].key,
+            "different configuration IDs produced the same symbol identity");
+    require(indexed.graph.symbols()[default_live].identity.translation_unit.empty(),
+            "external-linkage identity was incorrectly scoped to one translation unit");
+    const auto internal_dead = find_symbol(indexed.graph, "internal_dead");
+    require(!indexed.graph.symbols()[internal_dead].identity.translation_unit.empty(),
+            "internal-linkage identity omitted its translation-unit domain");
 
     std::ostringstream human_output;
     cxx_dead::write_human_report(human_output, indexed.graph, reachability, report,
@@ -265,6 +341,7 @@ int main() {
         test_json();
         test_shell_split();
         test_graph_algorithms();
+        test_stable_identity_contract();
         test_clang_integration();
         test_libtooling_availability_contract();
         std::cout << "all cxx-dead tests passed\n";

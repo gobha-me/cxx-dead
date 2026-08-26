@@ -98,6 +98,18 @@ void Graph::add_escape(SymbolId id, EscapeKind kind, Evidence evidence,
         escapes_.push_back({id, from, kind, std::move(evidence)});
 }
 
+void Graph::sort_roots() {
+    std::ranges::sort(roots_, [&](const Root& left, const Root& right) {
+        if (left.kind != right.kind)
+            return left.kind < right.kind;
+        const auto& lhs = symbols_[left.symbol];
+        const auto& rhs = symbols_[right.symbol];
+        if (lhs.qualified_name != rhs.qualified_name)
+            return lhs.qualified_name < rhs.qualified_name;
+        return lhs.signature < rhs.signature;
+    });
+}
+
 std::optional<SymbolId> Graph::find_by_key(std::string_view key) const {
     const auto iterator = key_to_id_.find(std::string(key));
     if (iterator == key_to_id_.end())
@@ -120,6 +132,53 @@ bool is_reportable(SymbolScope scope) {
 
 const SourceExtent& primary_source_extent(const Symbol& symbol) {
     return symbol.source.expansion.has_value() ? *symbol.source.expansion : symbol.source.spelling;
+}
+
+void merge_graph(Graph& destination, const Graph& source) {
+    std::vector<SymbolId> remap;
+    remap.reserve(source.symbols().size());
+    for (const auto& symbol : source.symbols())
+        remap.push_back(destination.add_or_merge_symbol(symbol));
+    for (const auto& edge : source.edges()) {
+        destination.add_edge(remap[edge.from], remap[edge.to], edge.kind, edge.evidence);
+    }
+    for (const auto& root : source.roots())
+        destination.add_root(remap[root.symbol], root.kind, root.evidence);
+    for (const auto& escape : source.escapes()) {
+        destination.add_escape(
+            remap[escape.symbol], escape.kind, escape.evidence,
+            escape.from.has_value() ? std::optional<SymbolId>{remap[*escape.from]} : std::nullopt);
+    }
+}
+
+std::size_t graph_fact_bytes(const Graph& graph) {
+    std::size_t result = 0;
+    const auto point_bytes = [](const SourcePoint& point) {
+        return point.file.string().size() + 4U * sizeof(std::size_t);
+    };
+    const auto extent_bytes = [&](const SourceExtent& extent) {
+        return point_bytes(extent.location) + point_bytes(extent.begin) + point_bytes(extent.end);
+    };
+    for (const auto& symbol : graph.symbols()) {
+        result += symbol.key.size() + symbol.name.size() + symbol.qualified_name.size() +
+                  symbol.class_name.size() + symbol.signature.size() +
+                  extent_bytes(symbol.source.spelling) + 4U * sizeof(bool) + 2U * sizeof(int);
+        if (symbol.source.expansion.has_value())
+            result += extent_bytes(*symbol.source.expansion);
+    }
+    for (const auto& edge : graph.edges()) {
+        result += 2U * sizeof(SymbolId) + sizeof(int) + edge.evidence.provider.size() +
+                  edge.evidence.reason.size();
+    }
+    for (const auto& root : graph.roots()) {
+        result += sizeof(SymbolId) + sizeof(int) + root.evidence.provider.size() +
+                  root.evidence.reason.size();
+    }
+    for (const auto& escape : graph.escapes()) {
+        result += 2U * sizeof(SymbolId) + sizeof(int) + escape.evidence.provider.size() +
+                  escape.evidence.reason.size();
+    }
+    return result;
 }
 
 ReachabilityResult analyze_reachability(const Graph& graph) {

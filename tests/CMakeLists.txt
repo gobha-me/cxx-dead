@@ -24,6 +24,17 @@ target_compile_definitions(cxx_dead_scope_tests PRIVATE
 )
 
 add_test(NAME cxx_dead_scope_tests COMMAND cxx_dead_scope_tests)
+
+if(CXX_DEAD_ENABLE_LIBTOOLING)
+    add_executable(cxx_dead_frontend_tests frontend_tests.cpp)
+    target_link_libraries(cxx_dead_frontend_tests PRIVATE cxx_dead_core)
+    target_compile_features(cxx_dead_frontend_tests PRIVATE cxx_std_23)
+    target_compile_definitions(cxx_dead_frontend_tests PRIVATE
+        CXX_DEAD_GOLDEN_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/golden"
+        CXX_DEAD_SCOPE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/scope"
+    )
+    add_test(NAME cxx_dead_frontend_tests COMMAND cxx_dead_frontend_tests)
+endif()
 add_test(
     NAME cxx_dead_scope_cli
     COMMAND $<TARGET_FILE:cxx-dead>

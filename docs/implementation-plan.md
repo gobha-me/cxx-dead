@@ -57,11 +57,15 @@ Remaining hardening tasks:
 
 ## Milestone 2 — scalable Clang frontend
 
+Status: the v0.5.0 prototype adds an optional direct LibTooling collector, a frontend-neutral per-TU
+fact merge, parity tests, and field measurements. LibTooling is the chosen direction; persistence,
+stable identity, invalidation, and parallelism remain open.
+
 Goal: make application analysis viable on real repositories.
 
 Deliverables:
 
-- LibTooling or clangd-index fact extraction without materializing complete JSON ASTs;
+- promote LibTooling fact extraction without materializing complete JSON ASTs;
 - Clang USRs plus linkage/configuration-aware stable symbol keys;
 - streaming per-TU fact files;
 - content and command hashing;

@@ -57,3 +57,29 @@ jobs:
           ASAN_OPTIONS: detect_leaks=1
           UBSAN_OPTIONS: print_stacktrace=1
         run: ctest --test-dir build-sanitized --output-on-failure
+
+  libtooling:
+    name: LibTooling (Clang 18)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Clang development libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-18 libclang-18-dev llvm-18-dev
+      - name: Configure
+        run: >-
+          cmake -S . -B build-libtooling
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_CXX_COMPILER=clang++-18
+          -DCXX_DEAD_ENABLE_LIBTOOLING=ON
+          -DLLVM_DIR=/usr/lib/llvm-18/lib/cmake/llvm
+          -DClang_DIR=/usr/lib/llvm-18/lib/cmake/clang
+      - name: Build
+        run: cmake --build build-libtooling --parallel 2
+      - name: Test
+        run: ctest --test-dir build-libtooling --output-on-failure
+      - name: Install smoke test
+        run: |
+          cmake --install build-libtooling --prefix "${{ runner.temp }}/cxx-dead-install"
+          "${{ runner.temp }}/cxx-dead-install/bin/cxx-dead" --version

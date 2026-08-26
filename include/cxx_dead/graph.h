@@ -110,6 +110,7 @@ class Graph {
     void add_root(SymbolId id, RootKind kind, Evidence evidence);
     void add_escape(SymbolId id, EscapeKind kind, Evidence evidence,
                     std::optional<SymbolId> from = std::nullopt);
+    void sort_roots();
 
     [[nodiscard]] std::optional<SymbolId> find_by_key(std::string_view key) const;
     [[nodiscard]] const std::vector<Symbol>& symbols() const {
@@ -145,6 +146,8 @@ struct ReachabilityResult {
 [[nodiscard]] bool has_indexed_body(SymbolScope scope);
 [[nodiscard]] bool is_reportable(SymbolScope scope);
 [[nodiscard]] const SourceExtent& primary_source_extent(const Symbol& symbol);
+void merge_graph(Graph& destination, const Graph& source);
+[[nodiscard]] std::size_t graph_fact_bytes(const Graph& graph);
 [[nodiscard]] ReachabilityResult analyze_reachability(const Graph& graph);
 [[nodiscard]] std::string_view to_string(SymbolKind kind);
 [[nodiscard]] std::string_view to_string(SymbolScope scope);

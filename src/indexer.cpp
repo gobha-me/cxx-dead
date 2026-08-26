@@ -794,13 +794,17 @@ IndexResult ClangAstIndexer::index(const std::vector<CompileCommand>& commands) 
             throw std::runtime_error("invalid Clang AST JSON for " + command.file.string() + ": " +
                                      error.what());
         }
-        TranslationUnitState state{command, options_, result.graph, {}, {}, {}, records, {}};
+        Graph translation_unit_facts;
+        TranslationUnitState state{command, options_, translation_unit_facts, {}, {}, {},
+                                   records, {}};
         for (const auto& ast : ast_documents)
             collect_contexts(ast, state, "", command.file);
         for (const auto& ast : ast_documents)
             collect_declarations(ast, state, "", command.file);
         for (const auto& ast : ast_documents)
             collect_uses(ast, state, std::nullopt, false, false, false);
+        result.fact_bytes += graph_fact_bytes(translation_unit_facts);
+        merge_graph(result.graph, translation_unit_facts);
         ++result.translation_units;
     }
 
@@ -822,11 +826,22 @@ IndexResult ClangAstIndexer::index(const std::vector<CompileCommand>& commands) 
     }
     if (!options_.ast_filter.empty())
         result.diagnostics.push_back("Clang AST name filter active: " + options_.ast_filter);
+    result.graph.sort_roots();
     if (result.graph.roots().empty()) {
         throw std::runtime_error(
             "no application roots found; include main() or provide a matching --root symbol");
     }
     return result;
+}
+
+std::string_view to_string(IndexFrontend frontend) {
+    switch (frontend) {
+    case IndexFrontend::AstJson:
+        return "ast-json";
+    case IndexFrontend::LibTooling:
+        return "libtooling";
+    }
+    return "unknown";
 }
 
 } // namespace cxx_dead

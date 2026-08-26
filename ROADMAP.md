@@ -16,7 +16,8 @@ dead, and every high-confidence finding has a useful explanation.
 
 ## M2 — Scalable indexing
 
-- Replace full in-memory Clang JSON ASTs with a LibTooling or clangd-index fact collector.
+- Promote the measured LibTooling prototype from its optional frontend into the scalable indexing
+  path without removing the dependency-light AST JSON fallback.
 - Introduce stable cross-translation-unit symbol identities.
 - Store deterministic per-TU facts with command/content hashing.
 - Add bounded parallelism, incremental invalidation, and resource telemetry.

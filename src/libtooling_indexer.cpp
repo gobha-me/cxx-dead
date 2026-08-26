@@ -10,6 +10,7 @@
 #include <clang/Basic/SourceManager.h>
 #include <clang/Frontend/CompilerInstance.h>
 #include <clang/Frontend/FrontendAction.h>
+#include <clang/Index/USRGeneration.h>
 #include <clang/Lex/Lexer.h>
 #include <clang/Tooling/ArgumentsAdjusters.h>
 #include <clang/Tooling/CompilationDatabase.h>
@@ -49,6 +50,24 @@ bool path_is_within(const std::filesystem::path& child, const std::filesystem::p
         return child == parent;
     const auto first = *relative.begin();
     return first != ".." && !relative.is_absolute();
+}
+
+std::string identity_path(const std::filesystem::path& path,
+                          const std::filesystem::path& project_root) {
+    if (path.empty())
+        return {};
+    if (path_is_within(path, project_root))
+        return path.lexically_relative(project_root).generic_string();
+    return path.lexically_normal().generic_string();
+}
+
+std::string fallback_identity_anchor(std::string_view qualified, std::string_view signature,
+                                     const SymbolSource& source,
+                                     const std::filesystem::path& project_root) {
+    const auto& location =
+        (source.expansion.has_value() ? *source.expansion : source.spelling).location;
+    return std::string(qualified) + "|" + std::string(signature) + "|" +
+           identity_path(location.file, project_root) + ":" + std::to_string(location.offset);
 }
 
 SymbolScope symbol_scope(const IndexOptions& options, const std::filesystem::path& file) {
@@ -108,16 +127,26 @@ class TranslationUnitCollector {
         if (!referenced && scope == SymbolScope::ExternalOpaque)
             return std::nullopt;
 
-        auto key = mangled_name(*declaration);
+        const auto linkage_name = mangled_name(*declaration);
         const bool namespace_static =
             method == nullptr && declaration->getStorageClass() == clang::SC_Static;
-        const bool internal = namespace_static || key.starts_with("_ZL") ||
-                              key.find("GLOBAL__N") != std::string::npos ||
+        const bool internal = namespace_static || linkage_name.starts_with("_ZL") ||
+                              linkage_name.find("GLOBAL__N") != std::string::npos ||
                               qualified.find("(anonymous namespace)") != std::string::npos;
-        if (key.empty())
-            key = qualified + "|" + signature(*declaration);
-        if (internal)
-            key += "@" + command_.file.string();
+        const bool translation_unit_local =
+            internal || lambda_call_operator || has_function_context(*declaration);
+        const bool template_pattern =
+            declaration->getDescribedFunctionTemplate() != nullptr &&
+            declaration->getTemplateSpecializationKind() == clang::TSK_Undeclared;
+        const auto declaration_signature = signature(*declaration);
+        auto identity = make_symbol_identity(
+            options_.configuration_id, usr(*declaration),
+            template_pattern ? std::string{} : linkage_name,
+            translation_unit_local ? identity_path(command_.file, options_.project_root)
+                                   : std::string{},
+            fallback_identity_anchor(qualified, declaration_signature, source,
+                                     options_.project_root));
+        const auto key = stable_symbol_key(identity);
 
         auto class_name = std::string{};
         if (method != nullptr) {
@@ -127,17 +156,15 @@ class TranslationUnitCollector {
                 class_name = method->getParent()->getQualifiedNameAsString();
         }
         const auto kind = symbol_kind(*declaration);
-        const bool template_pattern =
-            declaration->getDescribedFunctionTemplate() != nullptr &&
-            declaration->getTemplateSpecializationKind() == clang::TSK_Undeclared;
         const bool has_body =
             declaration->doesThisDeclarationHaveABody() || declaration->isExplicitlyDefaulted();
         const auto id = graph_.add_or_merge_symbol({
-            .key = std::move(key),
+            .key = key,
+            .identity = std::move(identity),
             .name = declaration->getNameAsString(),
             .qualified_name = qualified,
             .class_name = std::move(class_name),
-            .signature = signature(*declaration),
+            .signature = declaration_signature,
             .source = source,
             .kind = kind,
             .scope = scope,
@@ -338,6 +365,22 @@ class TranslationUnitCollector {
     std::string signature(const clang::FunctionDecl& declaration) const {
         clang::PrintingPolicy policy(context_.getLangOpts());
         return declaration.getType().getAsString(policy);
+    }
+
+    static bool has_function_context(const clang::FunctionDecl& declaration) {
+        for (auto* context = declaration.getDeclContext(); context != nullptr;
+             context = context->getParent()) {
+            if (context->isFunctionOrMethod())
+                return true;
+        }
+        return false;
+    }
+
+    static std::string usr(const clang::FunctionDecl& declaration) {
+        llvm::SmallString<128> storage;
+        if (clang::index::generateUSRForDecl(declaration.getCanonicalDecl(), storage))
+            return {};
+        return std::string(storage);
     }
 
     std::string mangled_name(const clang::FunctionDecl& declaration) const {
@@ -562,7 +605,8 @@ void add_manual_roots(IndexResult& result, const IndexOptions& options) {
         bool matched = false;
         for (SymbolId id = 0; id < result.graph.symbols().size(); ++id) {
             const auto& symbol = result.graph.symbols()[id];
-            if (symbol.qualified_name == requested || symbol.key == requested) {
+            if (symbol.qualified_name == requested || symbol.identity.linkage_name == requested ||
+                symbol.key == requested) {
                 result.graph.add_root(id, RootKind::Manual,
                                       {.provider = "command_line",
                                        .reason = "matched configured root: " + requested});
@@ -577,6 +621,8 @@ void add_manual_roots(IndexResult& result, const IndexOptions& options) {
 } // namespace
 
 LibToolingIndexer::LibToolingIndexer(IndexOptions options) : options_(std::move(options)) {
+    if (options_.configuration_id.empty())
+        throw std::invalid_argument("configuration identity cannot be empty");
     options_.project_root = std::filesystem::absolute(options_.project_root).lexically_normal();
     if (options_.report_paths.empty())
         options_.report_paths.push_back(options_.project_root);
@@ -624,11 +670,22 @@ IndexResult LibToolingIndexer::index(const std::vector<CompileCommand>& commands
     add_manual_roots(result, options_);
     if (!options_.ast_filter.empty())
         result.diagnostics.push_back("Clang AST name filter active: " + options_.ast_filter);
-    result.graph.sort_roots();
     if (result.graph.roots().empty()) {
         throw std::runtime_error(
             "no application roots found; include main() or provide a matching --root symbol");
     }
+    for (const auto& symbol : result.graph.symbols()) {
+        if (symbol.identity.quality == IdentityQuality::Fallback) {
+            result.diagnostics.push_back("fallback symbol identity for " + symbol.qualified_name +
+                                         " : " + symbol.signature + " at " +
+                                         symbol.identity.fallback_anchor +
+                                         "; Clang could not generate a linkage name or USR");
+        }
+    }
+    result.graph.canonicalize();
+    std::ranges::sort(result.diagnostics);
+    const auto duplicate = std::ranges::unique(result.diagnostics);
+    result.diagnostics.erase(duplicate.begin(), duplicate.end());
     return result;
 }
 

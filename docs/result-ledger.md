@@ -27,6 +27,8 @@ fact bytes are an in-memory neutral-fact payload estimate before cross-TU mergin
 
 | Run | Revision / environment | State | Reviewed findings | TP | FP | Known FN | Wall time | Peak RSS | AST / fact bytes | Defined / graph symbols | Edges |
 | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Golden corpus, LibTooling | v0.6.0 candidate; Clang 20.1.8; Linux x86-64 | complete | 18 / 18 | 18 | 0 | 0 | 9 ms | 87,796 KiB | 0 / 25,472 | 39 / 40 | 22 |
+| Golden corpus, AST JSON | v0.6.0 candidate; Clang 20.1.8; Linux x86-64 | complete | 18 / 18 | 18 | 0 | 0 | 94 ms | 95,484 KiB | 202,187 / 24,193 | 39 / 40 | 22 |
 | Golden corpus, LibTooling | v0.5.0 candidate; Clang 20.1.8; Linux x86-64 | complete | 18 / 18 | 18 | 0 | 0 | 8 ms | 125.5 MiB | 0 / 17,575 | 39 / 40 | 22 |
 | Golden corpus, AST JSON | v0.5.0 candidate; Clang 20.1.8; Linux x86-64 | complete | 18 / 18 | 18 | 0 | 0 | 71 ms | 125.5 MiB | 202,187 / 17,439 | 39 / 40 | 22 |
 | TermForge `forge-top`, LibTooling | v0.5.0 candidate; TermForge `6ef2825`; filtered Clang 20.1.8 | complete | 607 / 607 triaged by category | not individually enumerated | template and callable cases remain | not measured | 51.8 s | 275.1 MiB | 0 / 4,990,166 | 1,646 / 1,706 | 3,173 |
@@ -45,8 +47,9 @@ The historical field trials predate AST-byte and edge counters. Their missing me
 explicit rather than reconstructed from a different revision. Future reruns should populate every
 column and retain the old row when the frontend or run configuration changes.
 
-The v0.5.0 frontend rows are single controlled comparison runs after one warm development run;
-ordinary scheduler and filesystem-cache noise applies. The field-trial finding sets remain advisory:
+The v0.5.0 and v0.6.0 frontend rows are single controlled comparison runs after one warm
+development run; ordinary scheduler and filesystem-cache noise applies. The field-trial finding
+sets remain advisory:
 the equal Null Vector count preserves the known framework callback limitation, while TermForge's
 frontend count difference reflects template-body traversal differences and is not evidence that
 either frontend's unique classification is safe.

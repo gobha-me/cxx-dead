@@ -16,6 +16,7 @@ enum class IndexFrontend {
 
 struct IndexOptions {
     std::filesystem::path project_root;
+    std::string configuration_id{"default"};
     std::vector<std::filesystem::path> report_paths;
     std::vector<std::filesystem::path> excluded_paths;
     std::string clang_executable{"clang++"};

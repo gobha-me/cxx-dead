@@ -57,9 +57,9 @@ Remaining hardening tasks:
 
 ## Milestone 2 — scalable Clang frontend
 
-Status: the v0.5.0 prototype adds an optional direct LibTooling collector, a frontend-neutral per-TU
-fact merge, parity tests, and field measurements. LibTooling is the chosen direction; persistence,
-stable identity, invalidation, and parallelism remain open.
+Status: v0.6.0 adds configuration-aware stable identities, Clang USR metadata, deterministic graph
+merging, and an independently versioned graph artifact on top of the v0.5.0 LibTooling prototype.
+Persistence, invalidation, and parallelism remain open.
 
 Goal: make application analysis viable on real repositories.
 
@@ -162,8 +162,8 @@ For the next implementation cycle:
 
 1. Add project-owned global initialization modeling.
 2. Add unreachable weak-component aggregation.
-3. Prototype a LibTooling fact collector and benchmark it against AST JSON.
-4. Define stable graph artifact and JSON schemas.
+3. Prototype a LibTooling fact collector and benchmark it against AST JSON (completed in v0.5.0).
+4. Define stable graph artifact and JSON schemas (completed in v0.6.0).
 5. Add CMake File API target ingestion.
 
 Do not start library inference or baseline CI policy until target identity and index completeness are reliable.

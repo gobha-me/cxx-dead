@@ -1,3 +1,4 @@
+#include "cxx_dead/artifact.h"
 #include "cxx_dead/compile_database.h"
 #include "cxx_dead/graph.h"
 #include "cxx_dead/indexer.h"
@@ -23,7 +24,9 @@ struct CliOptions {
     std::optional<std::filesystem::path> translation_unit_root;
     std::vector<std::filesystem::path> excluded_paths;
     std::optional<std::filesystem::path> output;
+    std::optional<std::filesystem::path> graph_output;
     std::string format{"human"};
+    std::string configuration_id{"default"};
     std::string clang{"clang++"};
     cxx_dead::IndexFrontend frontend{cxx_dead::IndexFrontend::AstJson};
     std::string ast_filter;
@@ -45,12 +48,14 @@ Options:
   --tu-root PATH            Analyze only translation units below this path
   --exclude-path PATH       Exclude declarations below this path (repeatable)
   --mode application       Analysis context; only application is supported in the MVP
+  --configuration-id ID    Stable build-configuration identity (default: default)
   --root SYMBOL            Add a qualified or mangled symbol root (repeatable)
   --frontend NAME          Index frontend: ast-json or libtooling (default: ast-json)
   --clang PATH              Clang executable used for AST indexing (default: clang++)
   --ast-filter TEXT         Experimental frontend declaration-name filter
   --format human|json      Output format (default: human)
   --output PATH             Write the report to a file
+  --graph-output PATH       Write deterministic graph artifact JSON to a file
   --fail-on-unreachable     Exit with status 2 when candidates are found
   --verbose                 Include Clang indexing diagnostics
   --help                    Show this help
@@ -73,7 +78,7 @@ CliOptions parse_cli(int count, char** arguments) {
             std::exit(0);
         }
         if (argument == "--version") {
-            std::cout << "cxx-dead 0.5.0\n";
+            std::cout << "cxx-dead 0.6.0\n";
             std::exit(0);
         }
         if (argument == "--compile-commands") {
@@ -90,6 +95,10 @@ CliOptions parse_cli(int count, char** arguments) {
             const auto mode = require_value(index, count, arguments, argument);
             if (mode != "application")
                 throw std::runtime_error("only --mode application is supported");
+        } else if (argument == "--configuration-id") {
+            options.configuration_id = require_value(index, count, arguments, argument);
+            if (options.configuration_id.empty())
+                throw std::runtime_error("--configuration-id cannot be empty");
         } else if (argument == "--root") {
             options.roots.push_back(require_value(index, count, arguments, argument));
         } else if (argument == "--frontend") {
@@ -112,6 +121,8 @@ CliOptions parse_cli(int count, char** arguments) {
             }
         } else if (argument == "--output") {
             options.output = require_value(index, count, arguments, argument);
+        } else if (argument == "--graph-output") {
+            options.graph_output = require_value(index, count, arguments, argument);
         } else if (argument == "--verbose") {
             options.verbose = true;
         } else if (argument == "--fail-on-unreachable") {
@@ -129,6 +140,12 @@ CliOptions parse_cli(int count, char** arguments) {
     options.compilation_database =
         std::filesystem::absolute(options.compilation_database).lexically_normal();
     options.project_root = std::filesystem::absolute(options.project_root).lexically_normal();
+    if (options.output.has_value())
+        options.output = std::filesystem::absolute(*options.output).lexically_normal();
+    if (options.graph_output.has_value())
+        options.graph_output = std::filesystem::absolute(*options.graph_output).lexically_normal();
+    if (options.output.has_value() && options.graph_output == options.output)
+        throw std::runtime_error("--output and --graph-output must name different files");
     if (options.translation_unit_root.has_value()) {
         options.translation_unit_root =
             std::filesystem::absolute(*options.translation_unit_root).lexically_normal();
@@ -161,6 +178,7 @@ int main(int argc, char** argv) {
         }
         const cxx_dead::IndexOptions index_options{
             .project_root = options.project_root,
+            .configuration_id = options.configuration_id,
             .report_paths = options.report_paths,
             .excluded_paths = options.excluded_paths,
             .clang_executable = options.clang,
@@ -193,6 +211,19 @@ int main(int argc, char** argv) {
         }
         const auto reachability = cxx_dead::analyze_reachability(indexed.graph);
         const auto report = cxx_dead::build_report(indexed.graph, reachability);
+
+        if (options.graph_output.has_value()) {
+            std::ofstream graph_output(*options.graph_output);
+            if (!graph_output) {
+                throw std::runtime_error("cannot open graph artifact: " +
+                                         options.graph_output->string());
+            }
+            cxx_dead::write_graph_artifact(graph_output, indexed.graph,
+                                           {.configuration_id = options.configuration_id,
+                                            .frontend = indexed.frontend,
+                                            .translation_units = indexed.translation_units},
+                                           indexed.diagnostics);
+        }
 
         std::ofstream file_output;
         std::ostream* output = &std::cout;

@@ -1,3 +1,4 @@
+#include "cxx_dead/artifact.h"
 #include "cxx_dead/compile_database.h"
 #include "cxx_dead/graph.h"
 #include "cxx_dead/indexer.h"
@@ -278,8 +279,8 @@ void test_golden_corpus() {
                                 indexed.diagnostics);
     const auto report_json = cxx_dead::json::parse(json_output.str());
     require(report_json.find("schema_version") != nullptr &&
-                report_json.find("schema_version")->as_number() == 4.0,
-            "golden JSON report should use schema version 4");
+                report_json.find("schema_version")->as_number() == 5.0,
+            "golden JSON report should use schema version 5");
     require(report_json.find("roots") != nullptr &&
                 report_json.find("roots")->as_array().size() >= 2U,
             "golden JSON report should expose structured root evidence");
@@ -311,6 +312,20 @@ void test_golden_corpus() {
     });
     require(lambda_json != findings_json.end() && lambda_json->find("line")->as_number() == 100.0,
             "lambda finding should retain its reconstructed source line");
+    const auto lambda = find_symbol(indexed.graph, "operator()", "int (int) const");
+    require(!indexed.graph.symbols()[lambda].identity.translation_unit.empty(),
+            "lambda identity should be scoped to its translation unit");
+    const auto fallback_symbol =
+        std::ranges::find_if(indexed.graph.symbols(), [](const cxx_dead::Symbol& symbol) {
+            return symbol.identity.quality == cxx_dead::IdentityQuality::Fallback;
+        });
+    require(fallback_symbol != indexed.graph.symbols().end(),
+            "AST JSON corpus should exercise an unmangled fallback identity");
+    require(std::ranges::any_of(indexed.diagnostics,
+                                [](const std::string& diagnostic) {
+                                    return diagnostic.contains("fallback symbol identity");
+                                }),
+            "fallback identity should produce an actionable diagnostic");
 
     std::ostringstream human_output;
     cxx_dead::write_human_report(human_output, indexed.graph, reachability, report,
@@ -342,6 +357,31 @@ void test_golden_corpus() {
     require(indexed.translation_units == 3U, "golden corpus should index three translation units");
     require(indexed.ast_bytes > 0U, "golden corpus should record emitted AST bytes");
     require(indexed.fact_bytes > 0U, "golden corpus should record neutral fact bytes");
+
+    std::ostringstream artifact_output;
+    cxx_dead::write_graph_artifact(artifact_output, indexed.graph,
+                                   {.configuration_id = "default",
+                                    .frontend = indexed.frontend,
+                                    .translation_units = indexed.translation_units},
+                                   indexed.diagnostics);
+    auto reversed_commands = commands;
+    std::ranges::reverse(reversed_commands);
+    const auto reversed = indexer.index(reversed_commands);
+    const auto reversed_reachability = cxx_dead::analyze_reachability(reversed.graph);
+    const auto reversed_report = cxx_dead::build_report(reversed.graph, reversed_reachability);
+    std::ostringstream reversed_json_output;
+    cxx_dead::write_json_report(reversed_json_output, reversed.graph, reversed_reachability,
+                                reversed_report, reversed.diagnostics);
+    require(json_output.str() == reversed_json_output.str(),
+            "golden report depends on translation-unit ordering");
+    std::ostringstream reversed_artifact_output;
+    cxx_dead::write_graph_artifact(reversed_artifact_output, reversed.graph,
+                                   {.configuration_id = "default",
+                                    .frontend = reversed.frontend,
+                                    .translation_units = reversed.translation_units},
+                                   reversed.diagnostics);
+    require(artifact_output.str() == reversed_artifact_output.str(),
+            "golden graph artifact depends on translation-unit ordering");
 
     rusage usage{};
     require(::getrusage(RUSAGE_SELF, &usage) == 0, "could not read corpus peak RSS");

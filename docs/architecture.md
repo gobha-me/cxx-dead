@@ -21,10 +21,10 @@ command normalization ----> AST JSON subprocess ----+
                                   v
                              neutral Graph
                                   |
-                    +-------------+-------------+
-                    |                           |
-                    v                           v
-              root traversal               Tarjan SCC
+                    +-------------+-------------+-------------+
+                    |                           |             |
+                    v                           v             v
+              root traversal               Tarjan SCC   graph artifact
                     |                           |
                     +-------------+-------------+
                                   |
@@ -45,7 +45,9 @@ command normalization ----> AST JSON subprocess ----+
   commands and emits the same neutral facts directly. It is compiled only when
   `CXX_DEAD_ENABLE_LIBTOOLING=ON`.
 - `graph` merges symbols, stores typed roots, edges, and escapes with structured evidence, traverses
-  live edges, and computes unreachable SCCs.
+  live edges, computes unreachable SCCs, and canonicalizes fact ordering by stable symbol ID.
+- `artifact` writes deterministic graph JSON with independently versioned artifact and identity
+  schemas.
 - `report` applies typed evidence classifications and writes terminal or schema-versioned JSON
   evidence chains.
 - `json` is a small standards-oriented parser/escaper used for both Clang and compilation database input, avoiding a prototype package dependency.
@@ -93,7 +95,24 @@ root remains.
 
 ## Identity
 
-External functions currently merge by mangled name. Internal-linkage symbols add the translation-unit path. This is adequate for the fixture but not the final identity design; see the design review for USR/configuration requirements.
+Symbol IDs use a collision-safe, length-prefixed identity schema. Every ID includes the explicit
+`--configuration-id` value. Emitted symbols use their linkage name as the cross-frontend anchor;
+LibTooling also records the Clang USR and uses it as the anchor for template patterns and other
+unmangled declarations. Internal-linkage, anonymous, lambda, and function-local entities add the
+project-relative translation-unit path. External and inline definitions therefore merge across
+translation units while TU-local entities do not.
+
+The dependency-light AST JSON format does not expose Clang USRs. An unmangled AST JSON declaration
+uses its qualified name, signature, project-relative source path, and byte offset as a deterministic
+fallback. The symbol and run diagnostics mark that identity as `fallback`; it is never silently
+presented as equivalent to a USR-backed identity. Stable IDs are invariant to translation-unit
+ordering and workspace relocation when configuration IDs and project-relative paths are unchanged.
+Moving a declaration or changing its configuration may intentionally change its ID.
+
+After fact merging, symbols and all referring facts are canonicalized. Incompatible kind, qualified
+name, linkage domain, configuration, USR, or translation-unit metadata sharing one stable ID aborts
+the run instead of silently merging. Equivalent declarations choose source and presentation data
+deterministically.
 
 ## Symbol source contract
 
@@ -106,8 +125,9 @@ the expansion extent is primary when present and spelling is primary otherwise.
 
 Clang omits repeated file and line fields in nested JSON nodes. The indexer resolves those omissions
 from traversal context and a cached per-file byte-offset line map rather than emitting line zero.
-JSON schema version 4 exposes the spelling extent and a nullable expansion extent on roots and
-findings, while terminal labels include signatures so overloads remain unambiguous.
+JSON report schema version 5 exposes stable keys; version 4 introduced the spelling extent and a
+nullable expansion extent on roots and findings. Graph artifact schema 1 and identity schema 1 are
+versioned independently from report JSON.
 
 ## Failure model
 

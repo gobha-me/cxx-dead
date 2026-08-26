@@ -247,6 +247,24 @@ bool path_is_within(const std::filesystem::path& child, const std::filesystem::p
     return first != ".." && !relative.is_absolute();
 }
 
+std::string identity_path(const std::filesystem::path& path,
+                          const std::filesystem::path& project_root) {
+    if (path.empty())
+        return {};
+    if (path_is_within(path, project_root))
+        return path.lexically_relative(project_root).generic_string();
+    return path.lexically_normal().generic_string();
+}
+
+std::string fallback_identity_anchor(std::string_view qualified, std::string_view signature,
+                                     const SymbolSource& source,
+                                     const std::filesystem::path& project_root) {
+    const auto& location =
+        (source.expansion.has_value() ? *source.expansion : source.spelling).location;
+    return std::string(qualified) + "|" + std::string(signature) + "|" +
+           identity_path(location.file, project_root) + ":" + std::to_string(location.offset);
+}
+
 SymbolScope symbol_scope(const TranslationUnitState& state, const std::filesystem::path& file) {
     if (std::ranges::any_of(state.options.excluded_paths,
                             [&](const std::filesystem::path& excluded) {
@@ -367,17 +385,24 @@ void collect_contexts(const Value& node, TranslationUnitState& state, std::strin
 }
 
 void collect_declarations(const Value& node, TranslationUnitState& state, std::string scope,
-                          std::filesystem::path inherited_file) {
+                          std::filesystem::path inherited_file, bool tu_local_context = false) {
     const auto file = node_file(node, inherited_file, state.command.directory, state.command.file);
     const auto kind = node.string_or("kind");
     auto child_scope = scope;
+    auto child_tu_local_context = tu_local_context;
     if (kind == "NamespaceDecl") {
         child_scope = join_name(scope, anonymous_scope_name(node));
     } else if (is_record_kind(kind) && !node.bool_or("isImplicit")) {
         const auto name = node.string_or("name");
         if (!name.empty())
             child_scope = join_name(scope, name);
+    } else if (kind == "CXXRecordDecl") {
+        const auto* definition = node.find("definitionData");
+        if (definition != nullptr && definition->is_object() && definition->bool_or("isLambda"))
+            child_tu_local_context = true;
     }
+    if (is_function_kind(kind))
+        child_tu_local_context = true;
 
     if (is_function_kind(kind) && !node.bool_or("isImplicit")) {
         const auto ast_id = node.string_or("id");
@@ -392,18 +417,25 @@ void collect_declarations(const Value& node, TranslationUnitState& state, std::s
         }
         const auto qualified = join_name(owner_scope, name);
         const bool internal = is_internal_symbol(node, kind, mangled, qualified);
-        auto key = !mangled.empty() ? mangled : qualified + "|" + type_string(node);
-        if (internal)
-            key += "@" + state.command.file.string();
+        const auto signature = type_string(node);
+        const auto source = symbol_source(node, file, state);
+        const bool translation_unit_local = internal || tu_local_context;
+        auto identity = make_symbol_identity(
+            state.options.configuration_id, "", mangled,
+            translation_unit_local ? identity_path(state.command.file, state.options.project_root)
+                                   : std::string{},
+            fallback_identity_anchor(qualified, signature, source, state.options.project_root));
+        const auto key = stable_symbol_key(identity);
         const auto scope_kind = symbol_scope(state, file);
         if (!ast_id.empty() && !key.empty() && scope_kind != SymbolScope::Excluded) {
             Symbol symbol{
-                .key = std::move(key),
+                .key = key,
+                .identity = std::move(identity),
                 .name = name,
                 .qualified_name = qualified,
                 .class_name = symbol_kind(kind) == SymbolKind::Function ? "" : owner_scope,
-                .signature = type_string(node),
-                .source = symbol_source(node, file, state),
+                .signature = signature,
+                .source = source,
                 .kind = symbol_kind(kind),
                 .scope = scope_kind,
                 // A FunctionDecl nested in a FunctionTemplateDecl describes the pattern and has no
@@ -430,7 +462,7 @@ void collect_declarations(const Value& node, TranslationUnitState& state, std::s
     }
 
     for (const auto& child : children(node)) {
-        collect_declarations(child, state, child_scope, file);
+        collect_declarations(child, state, child_scope, file, child_tu_local_context);
     }
 }
 
@@ -747,9 +779,22 @@ void add_virtual_dispatch_edges(Graph& graph,
     }
 }
 
+void add_fallback_identity_diagnostics(IndexResult& result) {
+    for (const auto& symbol : result.graph.symbols()) {
+        if (symbol.identity.quality != IdentityQuality::Fallback)
+            continue;
+        result.diagnostics.push_back(
+            "fallback symbol identity for " + symbol.qualified_name + " : " + symbol.signature +
+            " at " + symbol.identity.fallback_anchor +
+            "; this frontend exposes neither a linkage name nor a Clang USR");
+    }
+}
+
 } // namespace
 
 ClangAstIndexer::ClangAstIndexer(IndexOptions options) : options_(std::move(options)) {
+    if (options_.configuration_id.empty())
+        throw std::invalid_argument("configuration identity cannot be empty");
     options_.project_root = std::filesystem::absolute(options_.project_root).lexically_normal();
     if (options_.report_paths.empty())
         options_.report_paths.push_back(options_.project_root);
@@ -814,7 +859,8 @@ IndexResult ClangAstIndexer::index(const std::vector<CompileCommand>& commands) 
         bool matched = false;
         for (SymbolId id = 0; id < result.graph.symbols().size(); ++id) {
             const auto& symbol = result.graph.symbols()[id];
-            if (symbol.qualified_name == requested || symbol.key == requested) {
+            if (symbol.qualified_name == requested || symbol.identity.linkage_name == requested ||
+                symbol.key == requested) {
                 result.graph.add_root(id, RootKind::Manual,
                                       {.provider = "command_line",
                                        .reason = "matched configured root: " + requested});
@@ -826,11 +872,15 @@ IndexResult ClangAstIndexer::index(const std::vector<CompileCommand>& commands) 
     }
     if (!options_.ast_filter.empty())
         result.diagnostics.push_back("Clang AST name filter active: " + options_.ast_filter);
-    result.graph.sort_roots();
     if (result.graph.roots().empty()) {
         throw std::runtime_error(
             "no application roots found; include main() or provide a matching --root symbol");
     }
+    add_fallback_identity_diagnostics(result);
+    result.graph.canonicalize();
+    std::ranges::sort(result.diagnostics);
+    const auto duplicate = std::ranges::unique(result.diagnostics);
+    result.diagnostics.erase(duplicate.begin(), duplicate.end());
     return result;
 }
 

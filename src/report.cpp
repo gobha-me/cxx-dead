@@ -169,6 +169,31 @@ fully_unreachable_types(const Graph& graph, const ReachabilityResult& reachabili
     return result;
 }
 
+void write_json_run(std::ostream& output, const RunDiagnostics& run) {
+    output << "  \"run\": {\n"
+           << "    \"state\": \"" << to_string(run.state) << "\",\n"
+           << "    \"frontend\": \"" << to_string(run.frontend) << "\",\n"
+           << "    \"partial_graph_discarded\": "
+           << (run.partial_graph_discarded ? "true" : "false") << ",\n"
+           << "    \"translation_units\": [";
+    for (std::size_t index = 0; index < run.translation_units.size(); ++index) {
+        const auto& unit = run.translation_units[index];
+        output << (index == 0 ? "\n" : ",\n") << "      {\n"
+               << "        \"file\": \"" << json::escape(unit.file.string()) << "\",\n"
+               << "        \"status\": \"" << to_string(unit.status) << "\",\n"
+               << "        \"stage\": \"" << json::escape(unit.stage) << "\",\n"
+               << "        \"message\": \"" << json::escape(unit.message) << "\"";
+        if (unit.exit_code.has_value())
+            output << ",\n        \"exit_code\": " << *unit.exit_code;
+        if (unit.signal.has_value() && *unit.signal != 0)
+            output << ",\n        \"signal\": " << *unit.signal;
+        output << "\n      }";
+    }
+    if (!run.translation_units.empty())
+        output << '\n';
+    output << "    ]\n  }";
+}
+
 } // namespace
 
 AnalysisReport build_report(const Graph& graph, const ReachabilityResult& result) {
@@ -246,6 +271,9 @@ void write_human_report(std::ostream& output, const Graph& graph,
                         const ReachabilityResult& reachability, const AnalysisReport& report,
                         const std::vector<std::string>& diagnostics,
                         const AnalysisMetadata& metadata) {
+    output << "Run state: " << to_string(metadata.run.state) << " ("
+           << to_string(metadata.run.frontend) << ", " << metadata.run.translation_units.size()
+           << " translation units)\n\n";
     if (metadata.mode == "target") {
         output << "Analysis target: " << metadata.target_name << " (" << metadata.target_kind
                << ")\n"
@@ -353,8 +381,9 @@ void write_json_report(std::ostream& output, const Graph& graph,
 
     output << "{\n"
            << "  \"schema_version\": " << report_schema_version << ",\n"
-           << "  \"mode\": \"" << json::escape(metadata.mode) << "\",\n"
-           << "  \"analysis_context\": {\n"
+           << "  \"mode\": \"" << json::escape(metadata.mode) << "\",\n";
+    write_json_run(output, metadata.run);
+    output << ",\n  \"analysis_context\": {\n"
            << "    \"configuration_id\": \"" << json::escape(metadata.configuration_id) << "\",\n"
            << "    \"configuration\": \"" << json::escape(metadata.configuration) << "\",\n"
            << "    \"target_id\": ";
@@ -468,6 +497,64 @@ void write_json_report(std::ostream& output, const Graph& graph,
     if (!diagnostics.empty())
         output << '\n';
     output << "  ]\n}\n";
+}
+
+void write_human_run_diagnostic(std::ostream& output, const IndexingError& error,
+                                const AnalysisMetadata&) {
+    const auto& run = error.diagnostics();
+    output << "cxx-dead indexing run\n\n"
+           << "RUN STATE\n"
+           << "  State:                   " << to_string(run.state) << '\n'
+           << "  Frontend:                " << to_string(run.frontend) << '\n'
+           << "  Partial graph discarded: " << (run.partial_graph_discarded ? "yes" : "no")
+           << "\n\n"
+           << "TRANSLATION UNITS\n";
+    for (const auto& unit : run.translation_units) {
+        output << "  - " << unit.file.string() << " [" << to_string(unit.status) << "]\n"
+               << "    Stage: " << unit.stage << '\n'
+               << "    Cause: " << unit.message << '\n';
+        if (unit.exit_code.has_value())
+            output << "    Exit:  " << *unit.exit_code << '\n';
+        if (unit.signal.has_value() && *unit.signal != 0)
+            output << "    Signal: " << *unit.signal << '\n';
+    }
+    output << "\nDIAGNOSTIC\n  " << error.what() << '\n';
+}
+
+void write_json_run_diagnostic(std::ostream& output, const IndexingError& error,
+                               const AnalysisMetadata& metadata) {
+    output << "{\n"
+           << "  \"schema_version\": " << report_schema_version << ",\n"
+           << "  \"mode\": \"" << json::escape(metadata.mode) << "\",\n";
+    write_json_run(output, error.diagnostics());
+    output << ",\n"
+           << "  \"analysis_context\": {\n"
+           << "    \"configuration_id\": \"" << json::escape(metadata.configuration_id) << "\",\n"
+           << "    \"configuration\": \"" << json::escape(metadata.configuration) << "\",\n"
+           << "    \"target_id\": ";
+    if (metadata.target_id.empty())
+        output << "null";
+    else
+        output << '"' << json::escape(metadata.target_id) << '"';
+    output << ",\n    \"target_name\": ";
+    if (metadata.target_name.empty())
+        output << "null";
+    else
+        output << '"' << json::escape(metadata.target_name) << '"';
+    output << ",\n    \"target_kind\": ";
+    if (metadata.target_kind.empty())
+        output << "null";
+    else
+        output << '"' << json::escape(metadata.target_kind) << '"';
+    output << ",\n    \"closure_targets\": [";
+    for (std::size_t index = 0; index < metadata.closure_targets.size(); ++index) {
+        if (index != 0)
+            output << ", ";
+        output << '"' << json::escape(metadata.closure_targets[index]) << '"';
+    }
+    output << "]\n  },\n"
+           << "  \"diagnostics\": [\"" << json::escape(error.what()) << "\"]\n"
+           << "}\n";
 }
 
 } // namespace cxx_dead

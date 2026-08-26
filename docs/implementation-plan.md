@@ -9,6 +9,9 @@ for v0.1.1. The corpus now covers 39 definitions, including overload signatures,
 spelling/expansion extents, and a line-resolved lambda. Additional fixtures and fully enumerated
 real-project reviews remain ongoing as new frontend behavior is added.
 
+v0.8.0 makes incomplete and unsupported runs machine-readable and adds hard wall-time and AST-output
+bounds to the subprocess frontend. Partial facts remain inaccessible to reporting.
+
 Goal: make precision measurable before expanding language coverage.
 
 Deliverables:
@@ -52,7 +55,8 @@ Remaining hardening tasks:
 3. Extend the structured evidence model with provider-composed dynamic edges and suppressions.
 4. Add weak-component/type/directory aggregation above SCCs.
 5. Replace provisional confidence numbers with configurable evidence policy.
-6. Add resource limits, cancellation, and structured incomplete-run diagnostics.
+6. Add resource limits, cancellation, and structured incomplete-run diagnostics. (completed in
+   v0.8.0)
 7. Test command normalization with launchers, response files, modules, PCH, and compiler-specific flags.
 
 ## Milestone 2 — scalable Clang frontend

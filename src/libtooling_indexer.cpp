@@ -642,7 +642,56 @@ IndexResult LibToolingIndexer::index(const std::vector<CompileCommand>& commands
         throw std::runtime_error("compilation database contains no commands");
     IndexResult result;
     result.frontend = IndexFrontend::LibTooling;
-    for (const auto& command : commands) {
+    if (options_.translation_unit_timeout.count() > 0 || options_.index_timeout.count() > 0 ||
+        options_.max_ast_bytes != 0) {
+        RunDiagnostics diagnostics{
+            .state = RunState::Unsupported,
+            .frontend = result.frontend,
+            .partial_graph_discarded = false,
+            .translation_units = {},
+        };
+        for (const auto& command : commands) {
+            diagnostics.translation_units.push_back({
+                .file = command.file,
+                .status = TranslationUnitStatus::Unsupported,
+                .stage = "configuration",
+                .message = "hard resource limits require --frontend ast-json",
+                .exit_code = std::nullopt,
+                .signal = std::nullopt,
+            });
+        }
+        throw IndexingError("hard resource limits require --frontend ast-json",
+                            std::move(diagnostics));
+    }
+    for (std::size_t command_index = 0; command_index < commands.size(); ++command_index) {
+        const auto& command = commands[command_index];
+        if (options_.cancellation_requested && options_.cancellation_requested()) {
+            RunDiagnostics diagnostics{
+                .state = RunState::Incomplete,
+                .frontend = result.frontend,
+                .partial_graph_discarded = !result.translation_unit_diagnostics.empty(),
+                .translation_units = result.translation_unit_diagnostics,
+            };
+            diagnostics.translation_units.push_back({
+                .file = command.file,
+                .status = TranslationUnitStatus::Cancelled,
+                .stage = "indexing",
+                .message = "indexing cancelled before translation-unit processing",
+                .exit_code = std::nullopt,
+                .signal = std::nullopt,
+            });
+            for (std::size_t index = command_index + 1U; index < commands.size(); ++index) {
+                diagnostics.translation_units.push_back({
+                    .file = commands[index].file,
+                    .status = TranslationUnitStatus::Skipped,
+                    .stage = "indexing",
+                    .message = "not indexed because an earlier translation unit did not complete",
+                    .exit_code = std::nullopt,
+                    .signal = std::nullopt,
+                });
+            }
+            throw IndexingError("LibTooling indexing cancelled", std::move(diagnostics));
+        }
         Graph translation_unit_facts;
         SingleCommandDatabase database(command);
         clang::tooling::ClangTool tool(database, {command.file.string()});
@@ -659,20 +708,86 @@ IndexResult LibToolingIndexer::index(const std::vector<CompileCommand>& commands
         FactActionFactory factory(command, options_, translation_unit_facts);
         const int exit_code = tool.run(&factory);
         if (exit_code != 0) {
-            throw std::runtime_error("Clang LibTooling indexing failed for " +
-                                     command.file.string() + " (exit " + std::to_string(exit_code) +
-                                     ")");
+            const auto message = "Clang LibTooling indexing failed for " + command.file.string() +
+                                 " (exit " + std::to_string(exit_code) + ")";
+            RunDiagnostics diagnostics{
+                .state = RunState::Incomplete,
+                .frontend = result.frontend,
+                .partial_graph_discarded = !result.translation_unit_diagnostics.empty(),
+                .translation_units = result.translation_unit_diagnostics,
+            };
+            diagnostics.translation_units.push_back({
+                .file = command.file,
+                .status = TranslationUnitStatus::Failed,
+                .stage = "clang",
+                .message = message,
+                .exit_code = exit_code,
+                .signal = std::nullopt,
+            });
+            for (std::size_t index = command_index + 1U; index < commands.size(); ++index) {
+                diagnostics.translation_units.push_back({
+                    .file = commands[index].file,
+                    .status = TranslationUnitStatus::Skipped,
+                    .stage = "indexing",
+                    .message = "not indexed because an earlier translation unit did not complete",
+                    .exit_code = std::nullopt,
+                    .signal = std::nullopt,
+                });
+            }
+            throw IndexingError(message, std::move(diagnostics));
         }
-        result.fact_bytes += graph_fact_bytes(translation_unit_facts);
-        merge_graph(result.graph, translation_unit_facts);
+        try {
+            result.fact_bytes += graph_fact_bytes(translation_unit_facts);
+            merge_graph(result.graph, translation_unit_facts);
+        } catch (const std::exception& error) {
+            const auto message = "could not merge LibTooling facts for " + command.file.string() +
+                                 ": " + error.what();
+            RunDiagnostics diagnostics{
+                .state = RunState::Incomplete,
+                .frontend = result.frontend,
+                .partial_graph_discarded = true,
+                .translation_units = result.translation_unit_diagnostics,
+            };
+            diagnostics.translation_units.push_back({
+                .file = command.file,
+                .status = TranslationUnitStatus::Failed,
+                .stage = "fact_merge",
+                .message = message,
+                .exit_code = std::nullopt,
+                .signal = std::nullopt,
+            });
+            for (std::size_t index = command_index + 1U; index < commands.size(); ++index) {
+                diagnostics.translation_units.push_back({
+                    .file = commands[index].file,
+                    .status = TranslationUnitStatus::Skipped,
+                    .stage = "indexing",
+                    .message = "not indexed because an earlier translation unit did not complete",
+                    .exit_code = std::nullopt,
+                    .signal = std::nullopt,
+                });
+            }
+            throw IndexingError(message, std::move(diagnostics));
+        }
         ++result.translation_units;
+        result.translation_unit_diagnostics.push_back({
+            .file = command.file,
+            .status = TranslationUnitStatus::Indexed,
+            .stage = "indexing",
+            .message = "translation unit indexed successfully",
+            .exit_code = std::nullopt,
+            .signal = std::nullopt,
+        });
     }
     add_manual_roots(result, options_);
     if (!options_.ast_filter.empty())
         result.diagnostics.push_back("Clang AST name filter active: " + options_.ast_filter);
     if (result.graph.roots().empty()) {
-        throw std::runtime_error(
-            "no application roots found; include main() or provide a matching --root symbol");
+        throw IndexingError(
+            "no application roots found; include main() or provide a matching --root symbol",
+            {.state = RunState::Incomplete,
+             .frontend = result.frontend,
+             .partial_graph_discarded = true,
+             .translation_units = result.translation_unit_diagnostics});
     }
     for (const auto& symbol : result.graph.symbols()) {
         if (symbol.identity.quality == IdentityQuality::Fallback) {
@@ -682,7 +797,16 @@ IndexResult LibToolingIndexer::index(const std::vector<CompileCommand>& commands
                                          "; Clang could not generate a linkage name or USR");
         }
     }
-    result.graph.canonicalize();
+    try {
+        result.graph.canonicalize();
+    } catch (const std::exception& error) {
+        throw IndexingError("could not finalize LibTooling facts: " + std::string(error.what()),
+                            {.state = RunState::Incomplete,
+                             .frontend = result.frontend,
+                             .partial_graph_discarded = true,
+                             .translation_units = result.translation_unit_diagnostics});
+    }
+    std::ranges::sort(result.translation_unit_diagnostics, {}, &TranslationUnitDiagnostic::file);
     std::ranges::sort(result.diagnostics);
     const auto duplicate = std::ranges::unique(result.diagnostics);
     result.diagnostics.erase(duplicate.begin(), duplicate.end());

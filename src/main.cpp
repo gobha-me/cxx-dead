@@ -6,10 +6,15 @@
 #include "cxx_dead/report.h"
 
 #include <algorithm>
+#include <charconv>
 #include <chrono>
+#include <csignal>
+#include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -36,6 +41,9 @@ struct CliOptions {
     cxx_dead::IndexFrontend frontend{cxx_dead::IndexFrontend::AstJson};
     std::string ast_filter;
     std::vector<std::string> roots;
+    std::chrono::milliseconds translation_unit_timeout{0};
+    std::chrono::milliseconds index_timeout{0};
+    std::size_t max_ast_bytes{0};
     bool verbose{false};
     bool clang_explicit{false};
     bool configuration_id_explicit{false};
@@ -64,6 +72,9 @@ Options:
   --frontend NAME          Index frontend: ast-json or libtooling (default: ast-json)
   --clang PATH              Clang executable used for AST indexing (default: clang++)
   --ast-filter TEXT         Experimental frontend declaration-name filter
+  --tu-timeout SECONDS     Per-translation-unit AST JSON wall-time limit
+  --index-timeout SECONDS  Whole AST JSON indexing wall-time limit
+  --max-ast-bytes BYTES    Per-translation-unit AST JSON output limit
   --format human|json      Output format (default: human)
   --output PATH             Write the report to a file
   --graph-output PATH       Write deterministic graph artifact JSON to a file
@@ -89,7 +100,7 @@ CliOptions parse_cli(int count, char** arguments) {
             std::exit(0);
         }
         if (argument == "--version") {
-            std::cout << "cxx-dead 0.7.0\n";
+            std::cout << "cxx-dead 0.8.0\n";
             std::exit(0);
         }
         if (argument == "--compile-commands") {
@@ -135,6 +146,31 @@ CliOptions parse_cli(int count, char** arguments) {
             options.clang_explicit = true;
         } else if (argument == "--ast-filter") {
             options.ast_filter = require_value(index, count, arguments, argument);
+        } else if (argument == "--tu-timeout" || argument == "--index-timeout") {
+            const auto value = require_value(index, count, arguments, argument);
+            std::uint64_t seconds = 0;
+            const auto parsed = std::from_chars(value.data(), value.data() + value.size(), seconds);
+            if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() ||
+                seconds == 0 ||
+                seconds >
+                    static_cast<std::uint64_t>(std::chrono::milliseconds::max().count() / 1000)) {
+                throw std::runtime_error(std::string(argument) +
+                                         " must be a positive whole number of seconds");
+            }
+            const auto timeout = std::chrono::seconds(seconds);
+            if (argument == "--tu-timeout")
+                options.translation_unit_timeout = timeout;
+            else
+                options.index_timeout = timeout;
+        } else if (argument == "--max-ast-bytes") {
+            const auto value = require_value(index, count, arguments, argument);
+            std::uint64_t bytes = 0;
+            const auto parsed = std::from_chars(value.data(), value.data() + value.size(), bytes);
+            if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() ||
+                bytes == 0 || bytes > std::numeric_limits<std::size_t>::max()) {
+                throw std::runtime_error("--max-ast-bytes must be a positive integer");
+            }
+            options.max_ast_bytes = static_cast<std::size_t>(bytes);
         } else if (argument == "--format") {
             options.format = require_value(index, count, arguments, argument);
             if (options.format != "human" && options.format != "json") {
@@ -203,6 +239,20 @@ bool path_is_within(const std::filesystem::path& child, const std::filesystem::p
     return !relative.is_absolute() && *relative.begin() != "..";
 }
 
+volatile std::sig_atomic_t cancellation_signal = 0;
+
+extern "C" void request_cancellation(int signal) {
+    cancellation_signal = signal;
+}
+
+void install_cancellation_handlers() {
+    struct sigaction action{};
+    action.sa_handler = request_cancellation;
+    ::sigemptyset(&action.sa_mask);
+    if (::sigaction(SIGINT, &action, nullptr) != 0 || ::sigaction(SIGTERM, &action, nullptr) != 0)
+        throw std::runtime_error("cannot install cancellation signal handlers");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -243,12 +293,52 @@ int main(int argc, char** argv) {
             .clang_executable = options.clang,
             .ast_filter = options.ast_filter,
             .manual_roots = options.roots,
+            .translation_unit_timeout = options.translation_unit_timeout,
+            .index_timeout = options.index_timeout,
+            .max_ast_bytes = options.max_ast_bytes,
+            .cancellation_requested = [] { return cancellation_signal != 0; },
             .verbose = options.verbose,
         };
+        cxx_dead::AnalysisMetadata report_metadata{
+            .mode = target_selection.has_value() ? "target" : "application",
+            .configuration_id = options.configuration_id,
+        };
+        if (target_selection.has_value()) {
+            const auto& context = target_selection->context;
+            report_metadata.configuration = context.configuration;
+            report_metadata.target_id = context.target_id;
+            report_metadata.target_name = context.target_name;
+            report_metadata.target_kind = cxx_dead::to_string(context.target_kind);
+            report_metadata.closure_targets = context.closure_targets;
+        }
+        install_cancellation_handlers();
         const auto started = std::chrono::steady_clock::now();
-        auto indexed = options.frontend == cxx_dead::IndexFrontend::LibTooling
-                           ? cxx_dead::LibToolingIndexer(index_options).index(commands)
-                           : cxx_dead::ClangAstIndexer(index_options).index(commands);
+        cxx_dead::IndexResult indexed;
+        try {
+            indexed = options.frontend == cxx_dead::IndexFrontend::LibTooling
+                          ? cxx_dead::LibToolingIndexer(index_options).index(commands)
+                          : cxx_dead::ClangAstIndexer(index_options).index(commands);
+        } catch (const cxx_dead::IndexingError& error) {
+            std::ofstream failure_file;
+            std::ostream* failure_output = options.format == "json" ? &std::cout : &std::cerr;
+            if (options.output.has_value()) {
+                failure_file.open(*options.output);
+                if (!failure_file) {
+                    throw std::runtime_error("cannot open output file: " +
+                                             options.output->string());
+                }
+                failure_output = &failure_file;
+            }
+            if (options.format == "json")
+                cxx_dead::write_json_run_diagnostic(*failure_output, error, report_metadata);
+            else
+                cxx_dead::write_human_run_diagnostic(*failure_output, error, report_metadata);
+            if (options.output.has_value())
+                std::cerr << "cxx-dead: " << cxx_dead::to_string(error.diagnostics().state)
+                          << " indexing run; diagnostics written to " << options.output->string()
+                          << '\n';
+            return cancellation_signal != 0 ? 128 + cancellation_signal : 1;
+        }
         if (target_selection.has_value()) {
             indexed.diagnostics.insert(indexed.diagnostics.end(),
                                        target_selection->diagnostics.begin(),
@@ -278,9 +368,11 @@ int main(int argc, char** argv) {
         }
         const auto reachability = cxx_dead::analyze_reachability(indexed.graph);
         const auto report = cxx_dead::build_report(indexed.graph, reachability);
-        cxx_dead::AnalysisMetadata report_metadata{
-            .mode = target_selection.has_value() ? "target" : "application",
-            .configuration_id = options.configuration_id,
+        report_metadata.run = {
+            .state = cxx_dead::RunState::Complete,
+            .frontend = indexed.frontend,
+            .partial_graph_discarded = false,
+            .translation_units = indexed.translation_unit_diagnostics,
         };
         cxx_dead::GraphArtifactMetadata artifact_metadata{
             .configuration_id = options.configuration_id,
@@ -289,11 +381,6 @@ int main(int argc, char** argv) {
         };
         if (target_selection.has_value()) {
             const auto& context = target_selection->context;
-            report_metadata.configuration = context.configuration;
-            report_metadata.target_id = context.target_id;
-            report_metadata.target_name = context.target_name;
-            report_metadata.target_kind = cxx_dead::to_string(context.target_kind);
-            report_metadata.closure_targets = context.closure_targets;
             artifact_metadata.configuration = context.configuration;
             artifact_metadata.target_id = context.target_id;
             artifact_metadata.target_name = context.target_name;

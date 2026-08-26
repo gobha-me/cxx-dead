@@ -5,10 +5,13 @@ until the prototype has stable performance and precision measurements.
 
 ## M1 — Application-mode hardening
 
+Status: v0.8.0 adds fail-closed AST JSON resource limits, process-group cancellation, and structured
+complete/incomplete/unsupported run diagnostics. Language-modeling and corpus work remain open.
+
 - Separate symbols needed for graph traversal from project-owned symbols eligible for reporting.
 - Represent roots, escapes, and classifications as structured evidence.
 - Improve implicit construction, destruction, lambda, callable, macro, and source-range coverage.
-- Add resource limits and explicit incomplete-run diagnostics.
+- Add resource limits and explicit incomplete-run diagnostics. (completed in v0.8.0)
 - Expand the golden fixture corpus and reviewed real-project result ledger.
 
 Exit criterion: no known live symbol in the application corpus is classified as high-confidence

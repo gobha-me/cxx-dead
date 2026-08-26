@@ -714,6 +714,42 @@ std::string concise_diagnostic(std::string diagnostic) {
     return diagnostic;
 }
 
+[[noreturn]] void fail_indexing(const std::vector<CompileCommand>& commands,
+                                const IndexResult& partial, std::size_t current,
+                                TranslationUnitStatus status, std::string stage,
+                                std::string message, std::optional<int> exit_code = std::nullopt,
+                                std::optional<int> signal = std::nullopt,
+                                RunState state = RunState::Incomplete) {
+    RunDiagnostics diagnostics{
+        .state = state,
+        .frontend = partial.frontend,
+        .partial_graph_discarded =
+            !partial.translation_unit_diagnostics.empty() || !partial.graph.symbols().empty(),
+        .translation_units = partial.translation_unit_diagnostics,
+    };
+    if (current < commands.size()) {
+        diagnostics.translation_units.push_back({
+            .file = commands[current].file,
+            .status = status,
+            .stage = std::move(stage),
+            .message = message,
+            .exit_code = exit_code,
+            .signal = signal,
+        });
+        for (std::size_t index = current + 1U; index < commands.size(); ++index) {
+            diagnostics.translation_units.push_back({
+                .file = commands[index].file,
+                .status = TranslationUnitStatus::Skipped,
+                .stage = "indexing",
+                .message = "not indexed because an earlier translation unit did not complete",
+                .exit_code = std::nullopt,
+                .signal = std::nullopt,
+            });
+        }
+    }
+    throw IndexingError(std::move(message), std::move(diagnostics));
+}
+
 std::optional<std::string>
 resolve_record_name(std::string_view owner, std::string_view base,
                     const std::unordered_map<std::string, RecordInfo>& records) {
@@ -813,15 +849,70 @@ IndexResult ClangAstIndexer::index(const std::vector<CompileCommand>& commands) 
     if (commands.empty())
         throw std::runtime_error("compilation database contains no commands");
     IndexResult result;
+    result.frontend = IndexFrontend::AstJson;
     std::unordered_map<std::string, RecordInfo> records;
+    const auto index_started = std::chrono::steady_clock::now();
 
-    for (const auto& command : commands) {
+    for (std::size_t command_index = 0; command_index < commands.size(); ++command_index) {
+        const auto& command = commands[command_index];
+        const auto translation_unit_started = std::chrono::steady_clock::now();
+        if (options_.cancellation_requested && options_.cancellation_requested()) {
+            fail_indexing(commands, result, command_index, TranslationUnitStatus::Cancelled,
+                          "indexing", "indexing cancelled before " + command.file.string());
+        }
+
+        std::optional<std::chrono::milliseconds> process_timeout;
+        std::string timeout_scope = "translation-unit";
+        if (options_.translation_unit_timeout.count() > 0)
+            process_timeout = options_.translation_unit_timeout;
+        if (options_.index_timeout.count() > 0) {
+            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - index_started);
+            if (elapsed >= options_.index_timeout) {
+                fail_indexing(commands, result, command_index, TranslationUnitStatus::TimedOut,
+                              "indexing", "index timeout reached before " + command.file.string());
+            }
+            const auto remaining = options_.index_timeout - elapsed;
+            if (!process_timeout.has_value() || remaining < *process_timeout) {
+                process_timeout = remaining;
+                timeout_scope = "index";
+            }
+        }
+
         const auto invocation = ast_command(command, options_);
-        const auto process = run_process(invocation, command.directory);
+        ProcessResult process;
+        try {
+            process = run_process(invocation, command.directory,
+                                  {.timeout = process_timeout,
+                                   .standard_output_limit = options_.max_ast_bytes,
+                                   .cancellation_requested = options_.cancellation_requested});
+        } catch (const std::exception& error) {
+            fail_indexing(commands, result, command_index, TranslationUnitStatus::Failed, "process",
+                          "could not run Clang AST indexing for " + command.file.string() + ": " +
+                              error.what());
+        }
+        if (process.termination == ProcessTermination::TimedOut) {
+            fail_indexing(commands, result, command_index, TranslationUnitStatus::TimedOut, "clang",
+                          timeout_scope + " timeout while indexing " + command.file.string(),
+                          process.exit_code, process.signal);
+        }
+        if (process.termination == ProcessTermination::Cancelled) {
+            fail_indexing(commands, result, command_index, TranslationUnitStatus::Cancelled,
+                          "clang", "indexing cancelled while processing " + command.file.string(),
+                          process.exit_code, process.signal);
+        }
+        if (process.termination == ProcessTermination::OutputLimitExceeded) {
+            fail_indexing(commands, result, command_index, TranslationUnitStatus::Failed,
+                          "ast_output",
+                          "Clang AST output exceeded --max-ast-bytes for " + command.file.string(),
+                          process.exit_code, process.signal);
+        }
         if (process.exit_code != 0) {
-            throw std::runtime_error("Clang AST indexing failed for " + command.file.string() +
-                                     " (exit " + std::to_string(process.exit_code) + "):\n" +
-                                     concise_diagnostic(process.standard_error));
+            const auto message = "Clang AST indexing failed for " + command.file.string() +
+                                 " (exit " + std::to_string(process.exit_code) + "):\n" +
+                                 concise_diagnostic(process.standard_error);
+            fail_indexing(commands, result, command_index, TranslationUnitStatus::Failed, "clang",
+                          message, process.exit_code, process.signal);
         }
         if (options_.verbose && !process.standard_error.empty()) {
             result.diagnostics.push_back(command.file.string() + ":\n" +
@@ -836,21 +927,62 @@ IndexResult ClangAstIndexer::index(const std::vector<CompileCommand>& commands) 
             for (const auto document : documents)
                 ast_documents.push_back(json::parse(document));
         } catch (const std::exception& error) {
-            throw std::runtime_error("invalid Clang AST JSON for " + command.file.string() + ": " +
-                                     error.what());
+            fail_indexing(
+                commands, result, command_index, TranslationUnitStatus::Failed, "ast_parse",
+                "invalid Clang AST JSON for " + command.file.string() + ": " + error.what());
         }
         Graph translation_unit_facts;
         TranslationUnitState state{command, options_, translation_unit_facts, {}, {}, {},
                                    records, {}};
-        for (const auto& ast : ast_documents)
-            collect_contexts(ast, state, "", command.file);
-        for (const auto& ast : ast_documents)
-            collect_declarations(ast, state, "", command.file);
-        for (const auto& ast : ast_documents)
-            collect_uses(ast, state, std::nullopt, false, false, false);
-        result.fact_bytes += graph_fact_bytes(translation_unit_facts);
-        merge_graph(result.graph, translation_unit_facts);
+        try {
+            for (const auto& ast : ast_documents)
+                collect_contexts(ast, state, "", command.file);
+            for (const auto& ast : ast_documents)
+                collect_declarations(ast, state, "", command.file);
+            for (const auto& ast : ast_documents)
+                collect_uses(ast, state, std::nullopt, false, false, false);
+        } catch (const std::exception& error) {
+            fail_indexing(commands, result, command_index, TranslationUnitStatus::Failed,
+                          "fact_collection",
+                          "could not collect Clang AST facts for " + command.file.string() + ": " +
+                              error.what());
+        }
+        if (options_.cancellation_requested && options_.cancellation_requested()) {
+            fail_indexing(commands, result, command_index, TranslationUnitStatus::Cancelled,
+                          "fact_collection",
+                          "indexing cancelled while collecting facts for " + command.file.string());
+        }
+        if (options_.translation_unit_timeout.count() > 0 &&
+            std::chrono::steady_clock::now() - translation_unit_started >=
+                options_.translation_unit_timeout) {
+            fail_indexing(
+                commands, result, command_index, TranslationUnitStatus::TimedOut, "fact_collection",
+                "translation-unit timeout while collecting facts for " + command.file.string());
+        }
+        if (options_.index_timeout.count() > 0 &&
+            std::chrono::steady_clock::now() - index_started >= options_.index_timeout) {
+            fail_indexing(commands, result, command_index, TranslationUnitStatus::TimedOut,
+                          "fact_collection",
+                          "index timeout while collecting facts for " + command.file.string());
+        }
+        try {
+            result.fact_bytes += graph_fact_bytes(translation_unit_facts);
+            merge_graph(result.graph, translation_unit_facts);
+        } catch (const std::exception& error) {
+            fail_indexing(commands, result, command_index, TranslationUnitStatus::Failed,
+                          "fact_merge",
+                          "could not merge Clang AST facts for " + command.file.string() + ": " +
+                              error.what());
+        }
         ++result.translation_units;
+        result.translation_unit_diagnostics.push_back({
+            .file = command.file,
+            .status = TranslationUnitStatus::Indexed,
+            .stage = "indexing",
+            .message = "translation unit indexed successfully",
+            .exit_code = std::nullopt,
+            .signal = std::nullopt,
+        });
     }
 
     add_virtual_dispatch_edges(result.graph, records);
@@ -873,11 +1005,24 @@ IndexResult ClangAstIndexer::index(const std::vector<CompileCommand>& commands) 
     if (!options_.ast_filter.empty())
         result.diagnostics.push_back("Clang AST name filter active: " + options_.ast_filter);
     if (result.graph.roots().empty()) {
-        throw std::runtime_error(
-            "no application roots found; include main() or provide a matching --root symbol");
+        throw IndexingError(
+            "no application roots found; include main() or provide a matching --root symbol",
+            {.state = RunState::Incomplete,
+             .frontend = result.frontend,
+             .partial_graph_discarded = true,
+             .translation_units = result.translation_unit_diagnostics});
     }
     add_fallback_identity_diagnostics(result);
-    result.graph.canonicalize();
+    try {
+        result.graph.canonicalize();
+    } catch (const std::exception& error) {
+        throw IndexingError("could not finalize Clang AST facts: " + std::string(error.what()),
+                            {.state = RunState::Incomplete,
+                             .frontend = result.frontend,
+                             .partial_graph_discarded = true,
+                             .translation_units = result.translation_unit_diagnostics});
+    }
+    std::ranges::sort(result.translation_unit_diagnostics, {}, &TranslationUnitDiagnostic::file);
     std::ranges::sort(result.diagnostics);
     const auto duplicate = std::ranges::unique(result.diagnostics);
     result.diagnostics.erase(duplicate.begin(), duplicate.end());
@@ -890,6 +1035,36 @@ std::string_view to_string(IndexFrontend frontend) {
         return "ast-json";
     case IndexFrontend::LibTooling:
         return "libtooling";
+    }
+    return "unknown";
+}
+
+std::string_view to_string(RunState state) {
+    switch (state) {
+    case RunState::Complete:
+        return "complete";
+    case RunState::Incomplete:
+        return "incomplete";
+    case RunState::Unsupported:
+        return "unsupported";
+    }
+    return "unknown";
+}
+
+std::string_view to_string(TranslationUnitStatus status) {
+    switch (status) {
+    case TranslationUnitStatus::Indexed:
+        return "indexed";
+    case TranslationUnitStatus::Failed:
+        return "failed";
+    case TranslationUnitStatus::Skipped:
+        return "skipped";
+    case TranslationUnitStatus::TimedOut:
+        return "timed_out";
+    case TranslationUnitStatus::Unsupported:
+        return "unsupported";
+    case TranslationUnitStatus::Cancelled:
+        return "cancelled";
     }
     return "unknown";
 }

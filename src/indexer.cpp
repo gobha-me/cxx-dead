@@ -625,9 +625,9 @@ void add_factory_construction_edges(TranslationUnitState& state, std::optional<S
         return;
     }
     if (!standard_factory) {
-        state.diagnostics.push_back(
-            "unsupported owning-pointer factory " + helper + " returning " + result_type +
-            "; conservatively retained construction and destruction for " + *element_type);
+        state.diagnostics.push_back("unsupported owning-pointer factory " + helper +
+                                    "; conservatively retained construction and destruction for " +
+                                    *element_type);
     }
 }
 

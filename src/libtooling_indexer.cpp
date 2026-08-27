@@ -286,10 +286,9 @@ class TranslationUnitCollector {
         add_use(caller, element->getDestructor(), EdgeKind::Constructs, global_initializer, reason);
         matched = matched || graph_.edges().size() + graph_.roots().size() != before;
         if (matched && !standard_factory) {
-            diagnostics_.push_back("unsupported owning-pointer factory " + helper + " returning " +
-                                   call.getType().getAsString() +
+            diagnostics_.push_back("unsupported owning-pointer factory " + helper +
                                    "; conservatively retained construction and destruction for " +
-                                   element_type.getAsString());
+                                   element->getQualifiedNameAsString());
         }
     }
 

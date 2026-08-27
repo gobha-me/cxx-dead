@@ -20,6 +20,7 @@
 #include <string>
 #include <string_view>
 #include <sys/resource.h>
+#include <tuple>
 
 namespace {
 
@@ -41,6 +42,7 @@ struct CliOptions {
     cxx_dead::IndexFrontend frontend{cxx_dead::IndexFrontend::AstJson};
     std::string ast_filter;
     std::vector<std::string> roots;
+    std::vector<cxx_dead::CallbackRegistrationRule> callback_registration_rules;
     std::chrono::milliseconds translation_unit_timeout{0};
     std::chrono::milliseconds index_timeout{0};
     std::size_t max_ast_bytes{0};
@@ -69,6 +71,9 @@ Options:
   --configuration NAME     Select a build-model configuration
   --target NAME            Select one target by name or id
   --root SYMBOL            Add a qualified or mangled symbol root (repeatable)
+  --callback-registration CALLEE:INDEX
+                           Treat zero-based callback argument INDEX as provider-reachable
+                           when CALLEE executes (repeatable)
   --frontend NAME          Index frontend: ast-json or libtooling (default: ast-json)
   --clang PATH              Clang executable used for AST indexing (default: clang++)
   --ast-filter TEXT         Experimental frontend declaration-name filter
@@ -91,6 +96,23 @@ std::string require_value(int& index, int count, char** arguments, std::string_v
     return arguments[index];
 }
 
+cxx_dead::CallbackRegistrationRule parse_callback_registration(std::string_view value) {
+    const auto separator = value.rfind(':');
+    if (separator == std::string_view::npos || separator == 0 || separator + 1U == value.size()) {
+        throw std::runtime_error(
+            "--callback-registration must use CALLEE:INDEX with a zero-based index");
+    }
+    const auto index_text = value.substr(separator + 1U);
+    std::size_t argument_index = 0;
+    const auto parsed =
+        std::from_chars(index_text.data(), index_text.data() + index_text.size(), argument_index);
+    if (parsed.ec != std::errc{} || parsed.ptr != index_text.data() + index_text.size()) {
+        throw std::runtime_error(
+            "--callback-registration must use CALLEE:INDEX with a zero-based index");
+    }
+    return {.callee = std::string(value.substr(0, separator)), .argument_index = argument_index};
+}
+
 CliOptions parse_cli(int count, char** arguments) {
     CliOptions options;
     for (int index = 1; index < count; ++index) {
@@ -100,7 +122,7 @@ CliOptions parse_cli(int count, char** arguments) {
             std::exit(0);
         }
         if (argument == "--version") {
-            std::cout << "cxx-dead 0.9.0\n";
+            std::cout << "cxx-dead 0.10.0\n";
             std::exit(0);
         }
         if (argument == "--compile-commands") {
@@ -133,6 +155,9 @@ CliOptions parse_cli(int count, char** arguments) {
             options.target = require_value(index, count, arguments, argument);
         } else if (argument == "--root") {
             options.roots.push_back(require_value(index, count, arguments, argument));
+        } else if (argument == "--callback-registration") {
+            options.callback_registration_rules.push_back(
+                parse_callback_registration(require_value(index, count, arguments, argument)));
         } else if (argument == "--frontend") {
             const auto frontend = require_value(index, count, arguments, argument);
             if (frontend == "ast-json")
@@ -229,6 +254,11 @@ CliOptions parse_cli(int count, char** arguments) {
         options.translation_unit_root =
             std::filesystem::absolute(*options.translation_unit_root).lexically_normal();
     }
+    std::ranges::sort(options.callback_registration_rules, {}, [](const auto& rule) {
+        return std::tuple{rule.callee, rule.argument_index};
+    });
+    const auto duplicate = std::ranges::unique(options.callback_registration_rules);
+    options.callback_registration_rules.erase(duplicate.begin(), duplicate.end());
     return options;
 }
 
@@ -293,6 +323,7 @@ int main(int argc, char** argv) {
             .clang_executable = options.clang,
             .ast_filter = options.ast_filter,
             .manual_roots = options.roots,
+            .callback_registration_rules = options.callback_registration_rules,
             .translation_unit_timeout = options.translation_unit_timeout,
             .index_timeout = options.index_timeout,
             .max_ast_bytes = options.max_ast_bytes,

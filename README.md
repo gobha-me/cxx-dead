@@ -14,7 +14,8 @@ The prototype already handles:
 - conservative `std::make_unique`/`std::make_shared` construction and diagnosed owning-pointer
   factory fallbacks;
 - conservative virtual dispatch across known class hierarchies;
-- address-taken functions as provider-attributed escape evidence;
+- address-taken functions and callable objects as provider-attributed escape evidence;
+- configurable callback-argument registration with structural/provider reachability provenance;
 - `main()`, global-initializer calls, and manual roots;
 - an experimental declaration-name filter for namespace-scoped trials;
 - unreachable cycles using Tarjan's SCC algorithm;
@@ -30,8 +31,8 @@ The prototype already handles:
 - human and versioned JSON output;
 - complete display signatures and exact spelling/expansion source extents.
 
-It does not yet infer library APIs, exactly model static-archive member extraction, model arbitrary
-registration/plugin systems or non-owning factory semantics, jointly analyze multiple build
+It does not yet infer library APIs, exactly model static-archive member extraction, load general
+provider/YAML policy or model non-owning factory semantics, jointly analyze multiple build
 configurations in one report, or incrementally cache translation-unit facts.
 Findings are candidates for review, not deletion instructions.
 
@@ -206,6 +207,20 @@ cxx-dead build/compile_commands.json \
   --fail-on-unreachable
 ```
 
+Register a callback argument conservatively when a known registrar executes. The index is
+zero-based, the option is repeatable, and `CALLEE` must exactly match a qualified name, linkage
+name, or stable symbol ID:
+
+```bash
+cxx-dead build/compile_commands.json \
+  --callback-registration engine::register_handler:1 \
+  --format json
+```
+
+Ordinary callable storage or passage records non-traversing escape evidence. Only a matched
+registration rule creates provider reachability, and a registration call in unreachable code does
+not retain its callback. Malformed, unmatched, out-of-range, or non-callable rules fail the run.
+
 If a dependency-heavy compilation database contains translation units outside the application, scope
 the input without rewriting the database:
 
@@ -257,17 +272,20 @@ The prototype assigns one of these evidence-based classifications:
 - `dead`: unreachable internal-linkage definition with no observed escape;
 - `likely_dead`: unreachable application definition with no observed escape;
 - `possibly_dead`: unreachable virtual definition requiring conservative review;
-- `dynamically_referenced`: unreachable by call edges, but its address is taken.
+- `dynamically_referenced`: unreachable by traversable edges, but its address or callable object
+  escapes.
 
 The numeric confidence values in JSON are provisional presentation values, not statistically calibrated probabilities. CI should initially filter by classification rather than treating them as measured likelihoods.
 
 Every classification is backed by an ordered evidence chain. Root, edge, and escape facts retain a
 provider and human-readable reason, while analysis decisions use typed facts rather than matching
-those presentation strings. JSON report schema version 7 adds explicit run state and
-per-translation-unit diagnostics; version 6 added an application/target analysis context, and
-version 5 changed `key` to a configuration-aware stable symbol ID. Version 4 added
+those presentation strings. JSON report schema version 8 adds structural/provider reachability
+counts and provider-retained callback evidence; version 7 added explicit run state and
+per-translation-unit diagnostics, and version 6 added an application/target analysis context.
+Version 5 changed `key` to a configuration-aware stable symbol ID. Version 4 added
 complete signatures and spelling/expansion locations and definition ranges while retaining the flat
-finding `file` and `line` fields. Graph artifact schema version 2 adds the matching target context;
+finding `file` and `line` fields. Graph artifact schema version 3 adds callback-registration edges
+and callable-object escapes; version 2 added target context.
 identity schema version 1 is unchanged and remains independent from the report schema.
 
 ## Current analysis contract

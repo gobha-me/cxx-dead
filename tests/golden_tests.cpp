@@ -279,8 +279,8 @@ void test_golden_corpus() {
                                 indexed.diagnostics);
     const auto report_json = cxx_dead::json::parse(json_output.str());
     require(report_json.find("schema_version") != nullptr &&
-                report_json.find("schema_version")->as_number() == 7.0,
-            "golden JSON report should use run-state schema version 7");
+                report_json.find("schema_version")->as_number() == 8.0,
+            "golden JSON report should use callable-provenance schema version 8");
     require(report_json.find("roots") != nullptr &&
                 report_json.find("roots")->as_array().size() >= 2U,
             "golden JSON report should expose structured root evidence");
@@ -289,7 +289,12 @@ void test_golden_corpus() {
         return finding.string_or("symbol") == "escaped_callback";
     });
     require(escaped_json != findings_json.end() && escaped_json->find("evidence") != nullptr &&
-                escaped_json->find("evidence")->as_array().size() == 2U &&
+                escaped_json->find("evidence")->as_array().size() >= 2U &&
+                std::ranges::any_of(escaped_json->find("evidence")->as_array(),
+                                    [](const auto& evidence) {
+                                        return evidence.string_or("escape_kind") ==
+                                               "callable_object";
+                                    }) &&
                 escaped_json->find("reason") == nullptr &&
                 escaped_json->find("address_taken") == nullptr,
             "escaped callback JSON should retain its structured evidence chain");

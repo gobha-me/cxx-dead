@@ -31,16 +31,19 @@ enum class EdgeKind {
     DirectCall,
     Constructs,
     VirtualDispatch,
+    CallbackRegistration,
 };
 
 enum class RootKind {
     ApplicationEntryPoint,
     GlobalInitializer,
     Manual,
+    CallbackRegistration,
 };
 
 enum class EscapeKind {
     AddressTaken,
+    CallableObject,
 };
 
 enum class IdentityQuality {
@@ -156,6 +159,8 @@ class Graph {
 
 struct ReachabilityResult {
     std::vector<bool> reachable;
+    std::vector<bool> structurally_reachable;
+    std::vector<bool> provider_reachable;
     std::vector<std::vector<SymbolId>> unreachable_sccs;
 };
 

@@ -184,7 +184,7 @@ int main() {
                                     production_report, production.diagnostics, metadata);
         const auto report_json = cxx_dead::json::parse(report_output.str());
         const auto* context = report_json.find("analysis_context");
-        require(report_json.find("schema_version")->as_number() == 7.0 && context != nullptr &&
+        require(report_json.find("schema_version")->as_number() == 8.0 && context != nullptr &&
                     context->string_or("target_name") == "production_app" &&
                     context->string_or("configuration_id") == "Debug",
                 "target report omitted versioned analysis context");
@@ -201,7 +201,7 @@ int main() {
              .translation_units = production.commands.size()},
             production.diagnostics);
         const auto artifact_json = cxx_dead::json::parse(artifact_output.str());
-        require(artifact_json.find("artifact_schema_version")->as_number() == 2.0 &&
+        require(artifact_json.find("artifact_schema_version")->as_number() == 3.0 &&
                     artifact_json.find("analysis_context") != nullptr,
                 "graph artifact omitted target analysis context");
 

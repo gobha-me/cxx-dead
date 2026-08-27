@@ -5,15 +5,15 @@ until the prototype has stable performance and precision measurements.
 
 ## M1 — Application-mode hardening
 
-Status: v0.9.0 adds selected direct/alias construction, base/member lifetime coverage, standard
-smart-pointer factory semantics, and conservative diagnostics for other owning-pointer factories.
-Callable, macro, and broader language-modeling work remain open.
+Status: v0.10.0 adds callable-object escape evidence, direct callable invocation, and configured
+callback-registration provenance. Macro and broader language-modeling work remain open.
 
 - Separate symbols needed for graph traversal from project-owned symbols eligible for reporting.
 - Represent roots, escapes, and classifications as structured evidence.
 - Improve implicit construction and destruction coverage. (initial factory/lifetime coverage
   completed in v0.9.0)
-- Improve lambda, callable, macro, and source-range coverage.
+- Improve lambda, callable, macro, and source-range coverage. (initial callable and registration
+  coverage completed in v0.10.0)
 - Add resource limits and explicit incomplete-run diagnostics. (completed in v0.8.0)
 - Expand the golden fixture corpus and reviewed real-project result ledger.
 
@@ -46,8 +46,9 @@ without treating the compilation database as a single link unit.
 
 ## M4 — Providers and library context
 
-- Define a provider API for roots, dynamic edges, escapes, and suppressions.
-- Add configuration and registration-pattern providers.
+- Expand the typed provider foundation from callback-registration edges to general roots, dynamic
+  edges, escapes, and suppressions.
+- Add YAML configuration on top of the v0.10.0 repeatable CLI registration rule.
 - Conservatively infer shared-library exports, public headers, visibility, and explicit APIs.
 - Define policies for templates and header-only libraries.
 

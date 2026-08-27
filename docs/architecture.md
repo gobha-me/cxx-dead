@@ -81,6 +81,7 @@ Traversed edges:
 - `DirectCall`
 - `Constructs`
 - `VirtualDispatch`
+- `CallbackRegistration`
 
 `Constructs` edges identify selected direct constructors, corresponding destructors, observed
 base/member initialization, and conservative smart-pointer factory lifetime effects. An
@@ -90,6 +91,14 @@ high-confidence false positive and adds a deterministic diagnostic naming the he
 Non-traversed escape facts:
 
 - `AddressTaken`
+- `CallableObject`
+
+Callable expressions that resolve to a unique function, member, functor, or lambda call operator
+produce structural call edges. Passing or storing an otherwise ambiguous callable records escape
+evidence without implying invocation; reassignment invalidates initializer-based indirect-call
+resolution. Repeatable callback-registration rules add traversable
+provider edges only from the actual registration call site; reports separately count structural
+and provider reachability.
 
 Current roots:
 
@@ -139,10 +148,11 @@ the expansion extent is primary when present and spelling is primary otherwise.
 
 Clang omits repeated file and line fields in nested JSON nodes. The indexer resolves those omissions
 from traversal context and a cached per-file byte-offset line map rather than emitting line zero.
-JSON report schema version 7 adds run state and translation-unit diagnostics; version 6 added
+JSON report schema version 8 adds callable/provider provenance; version 7 added run state and
+translation-unit diagnostics, while version 6 added
 analysis configuration and target context, version 5 exposed stable keys, and version 4 introduced
-spelling and expansion extents. Graph artifact schema 2 adds the
-same target context. Identity schema 1 remains independently versioned.
+spelling and expansion extents. Graph artifact schema 3 adds callable registration and escape facts;
+schema 2 added target context. Identity schema 1 remains independently versioned.
 
 ## Failure model
 
@@ -153,7 +163,7 @@ AST JSON subprocesses run in their own process groups; a wall-time limit, output
 
 ## Run states
 
-JSON report schema 7 carries these run states and the status of every selected translation unit:
+JSON report schema 8 carries these run states and the status of every selected translation unit:
 
 - **complete**: every selected translation unit produced parseable AST facts and at least one
   application root was found. Only a complete run may emit findings or return the policy status 2.

@@ -1,9 +1,11 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(cxx-dead VERSION 0.10.0 LANGUAGES CXX)
+project(cxx-dead VERSION 0.11.0 LANGUAGES CXX)
 
 option(CXX_DEAD_BUILD_TESTS "Build cxx-dead tests" ON)
 option(CXX_DEAD_ENABLE_LIBTOOLING "Build the experimental LibTooling frontend" OFF)
+
+find_package(yaml-cpp CONFIG REQUIRED)
 
 add_library(cxx_dead_core
     src/artifact.cpp
@@ -13,6 +15,7 @@ add_library(cxx_dead_core
     src/indexer.cpp
     src/json.cpp
     src/process.cpp
+    src/provider.cpp
     src/report.cpp
 )
 
@@ -30,6 +33,7 @@ else()
 endif()
 
 target_include_directories(cxx_dead_core PUBLIC include)
+target_link_libraries(cxx_dead_core PUBLIC yaml-cpp::yaml-cpp)
 target_compile_features(cxx_dead_core PUBLIC cxx_std_23)
 target_compile_options(cxx_dead_core PRIVATE
     $<$<CXX_COMPILER_ID:Clang,GNU>:-Wall;-Wextra;-Wpedantic;-Wconversion;-Wshadow>

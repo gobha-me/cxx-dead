@@ -27,6 +27,7 @@ fact bytes are an in-memory neutral-fact payload estimate before cross-TU mergin
 
 | Run | Revision / environment | State | Reviewed findings | TP | FP | Known FN | Wall time | Peak RSS | AST / fact bytes | Defined / graph symbols | Edges |
 | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Provider corpus, AST JSON | v0.11.0 candidate; Clang 20.1.8; Linux x86-64 | complete | 4 actionable + 1 suppressed / 5 | 5 | 0 | 0 | not benchmarked | not benchmarked | not captured | 10 / 10 | 3 |
 | Callable corpus, AST JSON | v0.10.0 candidate; Clang 20.1.8; Linux x86-64 | complete | 8 / 8 | 8 | 0 | 0 | 223 ms | 118,072 KiB | 124,067 / 11,445 | 16 / 16 | 9 |
 | TermForge `forge-top`, AST JSON | v0.10.0 candidate; TermForge `82b1466`; Clang 20.1.8 | complete | 141 callable findings reviewed by classification / 647 aggregate | not individually enumerated | 0 known live callable high-confidence findings | 2 hash functors remain for review | 69.1 s | 279,072 KiB | 530,628,637 / 7,703,237 | 1,698 / 1,758 | 3,281 |
 | Construction corpus, AST JSON | v0.9.0 candidate; Clang 20.1.8; Linux x86-64 | complete | 3 / 3 | 3 | 0 | 0 | 670 ms | 156,500 KiB | 157,605 / 11,708 | 13 / 16 | 19 |
@@ -63,6 +64,13 @@ frontend count difference reflects template-body traversal differences and is no
 either frontend's unique classification is safe.
 
 ## Golden review coverage
+
+The provider corpus covers exact YAML roots, a dynamic edge, callback registration, escape
+evidence, and an auditable suppression. Provider roots and edges retain only their configured
+targets, callback registration requires a reachable registration subsystem, escape evidence lowers
+confidence without creating reachability, and suppression removes one candidate from policy while
+preserving its original classification. Unconfigured, unmatched, ambiguous, invalid-schema, and
+provider-file-order controls are asserted directly.
 
 The callable corpus contains 16 project definitions. Its eight findings are the unreachable
 registration site, its escaped callback, an escaped `std::function` target, an escaped lambda, two

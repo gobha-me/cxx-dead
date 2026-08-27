@@ -60,7 +60,7 @@ Remaining hardening tasks:
    semantics remain open)
 2. Limit global-initializer roots to project-owned, linked definitions.
 3. Extend the v0.10.0 callback-registration foundation with general provider-composed roots,
-   dynamic edges, YAML policy, and suppressions.
+   dynamic edges, YAML policy, and suppressions. (completed in v0.11.0)
 4. Add weak-component/type/directory aggregation above SCCs.
 5. Replace provisional confidence numbers with configurable evidence policy.
 6. Add resource limits, cancellation, and structured incomplete-run diagnostics. (completed in
@@ -107,6 +107,10 @@ Deliverables:
 Gate: a mixed repository with two executables and shared/internal libraries reports target-relative and workspace-relative reachability without cross-target false positives.
 
 ## Milestone 4 — provider API and dynamic systems
+
+Status: v0.11.0 provides a typed provider fact API, strict schema-versioned YAML composition,
+exact symbol selectors, and auditable suppressions. Export/visibility inference and framework
+adapters remain follow-up providers.
 
 Goal: model project-specific reachability without embedding framework assumptions in the core.
 

@@ -8,6 +8,7 @@ target_compile_definitions(cxx_dead_tests PRIVATE
     CXX_DEAD_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/application"
     CXX_DEAD_CONSTRUCTION_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/construction"
     CXX_DEAD_CALLABLE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/callables"
+    CXX_DEAD_PROVIDER_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/providers"
     CXX_DEAD_PROCESS_FIXTURE="$<TARGET_FILE:cxx_dead_process_fixture>"
 )
 
@@ -90,6 +91,7 @@ if(CXX_DEAD_ENABLE_LIBTOOLING)
         CXX_DEAD_GOLDEN_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/golden"
         CXX_DEAD_CONSTRUCTION_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/construction"
         CXX_DEAD_CALLABLE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/callables"
+        CXX_DEAD_PROVIDER_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/providers"
         CXX_DEAD_SCOPE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/scope"
     )
     add_test(NAME cxx_dead_frontend_tests COMMAND cxx_dead_frontend_tests)
@@ -126,6 +128,43 @@ add_test(
     COMMAND $<TARGET_FILE:cxx-dead> --callback-registration invalid
 )
 set_tests_properties(cxx_dead_invalid_callback_cli PROPERTIES
+    WILL_FAIL TRUE
+)
+
+add_test(
+    NAME cxx_dead_provider_cli
+    COMMAND $<TARGET_FILE:cxx-dead>
+        "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/providers/compile_commands.json"
+        --project-root "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/providers"
+        --ast-filter provider_fixture
+        --provider-config "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/providers/provider.yaml"
+        --format json
+)
+set_tests_properties(cxx_dead_provider_cli PROPERTIES
+    PASS_REGULAR_EXPRESSION "\"suppressed_symbols\": 1"
+)
+
+add_test(
+    NAME cxx_dead_provider_suppressed_policy_cli
+    COMMAND $<TARGET_FILE:cxx-dead>
+        "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/providers/compile_commands.json"
+        --project-root "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/providers"
+        --ast-filter provider_fixture
+        --provider-config "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/providers/provider.yaml"
+        --provider-config "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/providers/suppress-all.yaml"
+        --fail-on-unreachable
+        --format json
+)
+set_tests_properties(cxx_dead_provider_suppressed_policy_cli PROPERTIES
+    PASS_REGULAR_EXPRESSION "\"actionable_unreachable_symbols\": 0"
+)
+
+add_test(
+    NAME cxx_dead_invalid_provider_cli
+    COMMAND $<TARGET_FILE:cxx-dead>
+        --provider-config "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/providers/invalid-unknown.yaml"
+)
+set_tests_properties(cxx_dead_invalid_provider_cli PROPERTIES
     WILL_FAIL TRUE
 )
 

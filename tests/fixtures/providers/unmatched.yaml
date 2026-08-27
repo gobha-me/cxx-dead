@@ -1,0 +1,6 @@
+schema_version: 1
+provider: unmatched_policy
+roots:
+  - symbol:
+      qualified_name: provider_fixture::missing
+    reason: selector intentionally names no symbol

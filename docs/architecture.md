@@ -100,11 +100,18 @@ resolution. Repeatable callback-registration rules add traversable
 provider edges only from the actual registration call site; reports separately count structural
 and provider reachability.
 
+Repeatable `--provider-config` files produce the same typed fact model for explicit roots, dynamic
+edges, escapes, suppressions, and callback-registration rules. Each file has a required provider
+identity and evidence reason. Exact stable-id, linkage-name, or qualified-name selectors resolve
+against the merged graph; unmatched or ambiguous selectors fail before analysis output. Provider
+files are applied canonically, so command-line order does not affect graph artifacts.
+
 Current roots:
 
 - a defined function named `main`;
 - targets called by detected namespace-scope initializers;
 - exact qualified or mangled names passed with `--root`.
+- exact symbols selected by a YAML provider.
 
 Each root records its typed kind, provider, and reason. Traversable edges retain equivalent provider
 evidence, while address-taking is stored separately as an escape fact with its originating symbol
@@ -148,11 +155,13 @@ the expansion extent is primary when present and spelling is primary otherwise.
 
 Clang omits repeated file and line fields in nested JSON nodes. The indexer resolves those omissions
 from traversal context and a cached per-file byte-offset line map rather than emitting line zero.
-JSON report schema version 8 adds callable/provider provenance; version 7 added run state and
+JSON report schema version 9 separates actionable and provider-suppressed findings while retaining
+suppression provenance; version 8 added callable/provider provenance; version 7 added run state and
 translation-unit diagnostics, while version 6 added
 analysis configuration and target context, version 5 exposed stable keys, and version 4 introduced
-spelling and expansion extents. Graph artifact schema 3 adds callable registration and escape facts;
-schema 2 added target context. Identity schema 1 remains independently versioned.
+spelling and expansion extents. Graph artifact schema 4 adds general provider facts and
+suppressions; schema 3 added callable registration and escape facts; schema 2 added target context.
+Identity schema 1 remains independently versioned.
 
 ## Failure model
 
@@ -163,7 +172,7 @@ AST JSON subprocesses run in their own process groups; a wall-time limit, output
 
 ## Run states
 
-JSON report schema 8 carries these run states and the status of every selected translation unit:
+JSON report schema 9 carries these run states and the status of every selected translation unit:
 
 - **complete**: every selected translation unit produced parseable AST facts and at least one
   application root was found. Only a complete run may emit findings or return the policy status 2.

@@ -1,0 +1,7 @@
+schema_version: 1
+provider: invalid_policy
+roots:
+  - symbol:
+      id: stable-id
+      qualified_name: provider_fixture::plugin_entry
+    reason: ambiguous selector form

@@ -144,6 +144,16 @@ void Graph::add_escape(SymbolId id, EscapeKind kind, Evidence evidence,
         escapes_.push_back({id, from, kind, std::move(evidence)});
 }
 
+void Graph::add_suppression(SymbolId id, Evidence evidence) {
+    if (id >= symbols_.size())
+        throw std::out_of_range("invalid graph suppression");
+    const auto duplicate = std::ranges::any_of(suppressions_, [&](const Suppression& suppression) {
+        return suppression.symbol == id && suppression.evidence == evidence;
+    });
+    if (!duplicate)
+        suppressions_.push_back({id, std::move(evidence)});
+}
+
 void Graph::canonicalize() {
     std::vector<SymbolId> order(symbols_.size());
     for (SymbolId id = 0; id < order.size(); ++id)
@@ -175,6 +185,8 @@ void Graph::canonicalize() {
         if (escape.from.has_value())
             escape.from = remap[*escape.from];
     }
+    for (auto& suppression : suppressions_)
+        suppression.symbol = remap[suppression.symbol];
 
     std::ranges::sort(edges_, [](const Edge& left, const Edge& right) {
         return std::tuple{left.from, left.to, left.kind, left.evidence.provider,
@@ -192,6 +204,10 @@ void Graph::canonicalize() {
                                                              right.evidence.provider,
                                                              right.evidence.reason};
     });
+    std::ranges::sort(suppressions_, [](const Suppression& left, const Suppression& right) {
+        return std::tuple{left.symbol, left.evidence.provider, left.evidence.reason} <
+               std::tuple{right.symbol, right.evidence.provider, right.evidence.reason};
+    });
 }
 
 std::optional<SymbolId> Graph::find_by_key(std::string_view key) const {
@@ -203,7 +219,16 @@ std::optional<SymbolId> Graph::find_by_key(std::string_view key) const {
 
 bool is_traversable(EdgeKind kind) {
     return kind == EdgeKind::DirectCall || kind == EdgeKind::Constructs ||
-           kind == EdgeKind::VirtualDispatch || kind == EdgeKind::CallbackRegistration;
+           kind == EdgeKind::VirtualDispatch || kind == EdgeKind::CallbackRegistration ||
+           kind == EdgeKind::Provider;
+}
+
+bool is_provider(EdgeKind kind) {
+    return kind == EdgeKind::CallbackRegistration || kind == EdgeKind::Provider;
+}
+
+bool is_provider(RootKind kind) {
+    return kind == RootKind::CallbackRegistration || kind == RootKind::Provider;
 }
 
 bool has_indexed_body(SymbolScope scope) {
@@ -279,6 +304,8 @@ void merge_graph(Graph& destination, const Graph& source) {
             remap[escape.symbol], escape.kind, escape.evidence,
             escape.from.has_value() ? std::optional<SymbolId>{remap[*escape.from]} : std::nullopt);
     }
+    for (const auto& suppression : source.suppressions())
+        destination.add_suppression(remap[suppression.symbol], suppression.evidence);
 }
 
 std::size_t graph_fact_bytes(const Graph& graph) {
@@ -311,6 +338,10 @@ std::size_t graph_fact_bytes(const Graph& graph) {
         result += 2U * sizeof(SymbolId) + sizeof(int) + escape.evidence.provider.size() +
                   escape.evidence.reason.size();
     }
+    for (const auto& suppression : graph.suppressions()) {
+        result += sizeof(SymbolId) + suppression.evidence.provider.size() +
+                  suppression.evidence.reason.size();
+    }
     return result;
 }
 
@@ -321,7 +352,7 @@ ReachabilityResult analyze_reachability(const Graph& graph) {
     for (const auto& edge : graph.edges()) {
         if (is_traversable(edge.kind) && has_indexed_body(graph.symbols()[edge.from].scope)) {
             adjacency[edge.from].push_back(edge.to);
-            if (edge.kind != EdgeKind::CallbackRegistration)
+            if (!is_provider(edge.kind))
                 structural_adjacency[edge.from].push_back(edge.to);
         }
     }
@@ -333,7 +364,7 @@ ReachabilityResult analyze_reachability(const Graph& graph) {
         std::vector<SymbolId> stack;
         stack.reserve(graph.roots().size());
         for (const auto& root : graph.roots()) {
-            if (!include_provider_roots && root.kind == RootKind::CallbackRegistration)
+            if (!include_provider_roots && is_provider(root.kind))
                 continue;
             if (!reachable[root.symbol]) {
                 reachable[root.symbol] = true;
@@ -465,6 +496,8 @@ std::string_view to_string(EdgeKind kind) {
         return "virtual_dispatch";
     case EdgeKind::CallbackRegistration:
         return "callback_registration";
+    case EdgeKind::Provider:
+        return "provider";
     }
     return "unknown";
 }
@@ -479,6 +512,8 @@ std::string_view to_string(RootKind kind) {
         return "manual";
     case RootKind::CallbackRegistration:
         return "callback_registration";
+    case RootKind::Provider:
+        return "provider";
     }
     return "unknown";
 }
@@ -489,6 +524,8 @@ std::string_view to_string(EscapeKind kind) {
         return "address_taken";
     case EscapeKind::CallableObject:
         return "callable_object";
+    case EscapeKind::Provider:
+        return "provider";
     }
     return "unknown";
 }

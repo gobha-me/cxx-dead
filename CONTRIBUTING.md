@@ -20,6 +20,9 @@ issue.
 
 ## Building and testing
 
+Install the `yaml-cpp` development package before configuring (for example,
+`libyaml-cpp-dev` on Ubuntu).
+
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build -j2

@@ -1,0 +1,3 @@
+schema_version: 1
+provider: invalid_policy
+unknown_facts: []

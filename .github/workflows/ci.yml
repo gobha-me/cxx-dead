@@ -26,6 +26,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+      - name: Install YAML dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libyaml-cpp-dev
       - name: Configure
         run: >-
           cmake -S . -B build
@@ -43,6 +47,10 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - name: Install YAML dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libyaml-cpp-dev
       - name: Configure
         run: >-
           cmake -S . -B build-sanitized
@@ -66,7 +74,7 @@ jobs:
       - name: Install Clang development libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang-18 libclang-18-dev llvm-18-dev
+          sudo apt-get install -y clang-18 libclang-18-dev llvm-18-dev libyaml-cpp-dev
       - name: Configure
         run: >-
           cmake -S . -B build-libtooling

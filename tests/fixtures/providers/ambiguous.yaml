@@ -1,0 +1,6 @@
+schema_version: 1
+provider: ambiguous_policy
+roots:
+  - symbol:
+      qualified_name: provider_fixture::overloaded
+    reason: selector intentionally omits the required overload signature

@@ -16,6 +16,7 @@ The prototype already handles:
 - conservative virtual dispatch across known class hierarchies;
 - address-taken functions and callable objects as provider-attributed escape evidence;
 - configurable callback-argument registration with structural/provider reachability provenance;
+- strict YAML providers for explicit roots, dynamic edges, escapes, and auditable suppressions;
 - `main()`, global-initializer calls, and manual roots;
 - an experimental declaration-name filter for namespace-scoped trials;
 - unreachable cycles using Tarjan's SCC algorithm;
@@ -31,9 +32,9 @@ The prototype already handles:
 - human and versioned JSON output;
 - complete display signatures and exact spelling/expansion source extents.
 
-It does not yet infer library APIs, exactly model static-archive member extraction, load general
-provider/YAML policy or model non-owning factory semantics, jointly analyze multiple build
-configurations in one report, or incrementally cache translation-unit facts.
+It does not yet infer library APIs, exactly model static-archive member extraction, model
+non-owning factory semantics, jointly analyze multiple build configurations in one report, or
+incrementally cache translation-unit facts.
 Findings are candidates for review, not deletion instructions.
 
 ## Development status
@@ -47,8 +48,8 @@ APIs. It has been exercised with GCC 14, Clang 18/20, and Clang 20 AST output.
 
 ## Build
 
-The default build requires a C++23 compiler, CMake 3.25 or later, and a Clang executable capable of
-`-ast-dump=json` (tested with Clang 20).
+The default build requires a C++23 compiler, CMake 3.25 or later, `yaml-cpp`, and a Clang executable
+capable of `-ast-dump=json` (tested with Clang 20).
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -57,8 +58,9 @@ ctest --test-dir build --output-on-failure
 ```
 
 No LLVM development package or third-party JSON library is required for the default AST JSON
-frontend. To build the experimental LibTooling frontend, install matching LLVM/Clang development
-packages and configure their CMake package directories when they are not on the default path:
+frontend. The YAML provider uses the required `yaml-cpp` package. To build the experimental
+LibTooling frontend, install matching LLVM/Clang development packages and configure their CMake
+package directories when they are not on the default path:
 
 ```bash
 cmake -S . -B build-libtooling \
@@ -221,6 +223,42 @@ Ordinary callable storage or passage records non-traversing escape evidence. Onl
 registration rule creates provider reachability, and a registration call in unreachable code does
 not retain its callback. Malformed, unmatched, out-of-range, or non-callable rules fail the run.
 
+For general project policy, load one or more explicit YAML providers:
+
+```yaml
+schema_version: 1
+provider: project_policy
+roots:
+  - symbol: {qualified_name: engine::plugin_entry}
+    reason: loaded by the runtime plugin manager
+edges:
+  - from: {qualified_name: engine::plugin_entry}
+    to: {qualified_name: engine::dispatch}
+    reason: runtime plugin dispatch
+escapes:
+  - symbol: {linkage_name: _ZN6engine8callbackEv}
+    reason: stored by an external runtime
+suppressions:
+  - symbol: {qualified_name: engine::legacy_hook, signature: "void ()"}
+    reason: retained for deployed plugin compatibility
+callback_registrations:
+  - callee: {qualified_name: engine::register_handler}
+    argument_index: 1
+    reason: registrar owns callback argument one
+```
+
+```bash
+cxx-dead build/compile_commands.json \
+  --provider-config cxx-dead.yaml \
+  --format json
+```
+
+Each selector sets exactly one of `id`, `linkage_name`, or `qualified_name`; a signature may refine
+a qualified name. Provider selectors must resolve to exactly one graph symbol. Unknown fields,
+duplicate keys, unsupported schema versions, unmatched selectors, and ambiguous selectors fail the
+run. Files compose additively and order-independently; there is no implicit discovery, environment
+expansion, globbing, or regex matching.
+
 If a dependency-heavy compilation database contains translation units outside the application, scope
 the input without rewriting the database:
 
@@ -244,7 +282,9 @@ Definitions elsewhere under the project root are indexed but never reported. Ref
 outside the project root are opaque graph terminals, and `--exclude-path` removes matching
 declarations entirely.
 
-`--fail-on-unreachable` returns status 2 when a complete run contains any unreachable candidate.
+`--fail-on-unreachable` returns status 2 when a complete run contains any actionable unreachable
+candidate. Provider-suppressed candidates remain in `suppressed_findings` with their original
+classification and suppression provenance, but do not trigger status 2.
 Analysis/indexing errors, resource limits, and unsupported requests return status 1. A successful
 advisory run returns status 0 regardless of findings. Signal cancellation remains fail-closed and
 uses the conventional signal-derived status (130 for `SIGINT`, 143 for `SIGTERM`).
@@ -279,13 +319,15 @@ The numeric confidence values in JSON are provisional presentation values, not s
 
 Every classification is backed by an ordered evidence chain. Root, edge, and escape facts retain a
 provider and human-readable reason, while analysis decisions use typed facts rather than matching
-those presentation strings. JSON report schema version 8 adds structural/provider reachability
-counts and provider-retained callback evidence; version 7 added explicit run state and
+those presentation strings. JSON report schema version 9 adds actionable/suppressed counts and
+auditable `suppressed_findings`; version 8 added structural/provider reachability counts and
+provider-retained callback evidence; version 7 added explicit run state and
 per-translation-unit diagnostics, and version 6 added an application/target analysis context.
 Version 5 changed `key` to a configuration-aware stable symbol ID. Version 4 added
 complete signatures and spelling/expansion locations and definition ranges while retaining the flat
-finding `file` and `line` fields. Graph artifact schema version 3 adds callback-registration edges
-and callable-object escapes; version 2 added target context.
+finding `file` and `line` fields. Graph artifact schema version 4 adds provider suppressions and
+general configured roots, edges, and escapes; version 3 added callback-registration edges and
+callable-object escapes; version 2 added target context.
 identity schema version 1 is unchanged and remains independent from the report schema.
 
 ## Current analysis contract

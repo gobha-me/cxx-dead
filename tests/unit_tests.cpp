@@ -4,6 +4,7 @@
 #include "cxx_dead/indexer.h"
 #include "cxx_dead/json.h"
 #include "cxx_dead/process.h"
+#include "cxx_dead/provider.h"
 #include "cxx_dead/report.h"
 
 #include <algorithm>
@@ -285,8 +286,8 @@ void test_clang_integration() {
     const auto report_json = cxx_dead::json::parse(json_output.str());
     require(report_json.find("findings") != nullptr, "JSON report has no findings field");
     require(report_json.find("schema_version") != nullptr &&
-                report_json.find("schema_version")->as_number() == 8.0,
-            "JSON report does not use callable-provenance schema version 8");
+                report_json.find("schema_version")->as_number() == 9.0,
+            "JSON report does not use provider schema version 9");
     require(report_json.find("roots") != nullptr && report_json.find("roots")->is_array(),
             "JSON report has no structured roots field");
     require(report_json.find("run") != nullptr &&
@@ -301,7 +302,7 @@ void test_clang_integration() {
                                    indexed.diagnostics);
     const auto artifact_json = cxx_dead::json::parse(artifact_output.str());
     require(artifact_json.find("artifact_schema_version") != nullptr &&
-                artifact_json.find("artifact_schema_version")->as_number() == 3.0 &&
+                artifact_json.find("artifact_schema_version")->as_number() == 4.0 &&
                 artifact_json.find("identity_schema_version") != nullptr &&
                 artifact_json.find("identity_schema_version")->as_number() == 1.0,
             "graph artifact schema versions are missing or coupled to the report schema");
@@ -447,8 +448,10 @@ void test_callable_registration_integration() {
         .manual_roots = {"callable_fixture::run"},
         .callback_registration_rules =
             {
-                {.callee = "callable_fixture::member_registrar", .argument_index = 0},
-                {.callee = "callable_fixture::registrar", .argument_index = 0},
+                {.callee = cxx_dead::SymbolSelector{"callable_fixture::member_registrar"},
+                 .argument_index = 0},
+                {.callee = cxx_dead::SymbolSelector{"callable_fixture::registrar"},
+                 .argument_index = 0},
             },
     };
     const auto indexed = cxx_dead::ClangAstIndexer(options).index(commands);
@@ -564,7 +567,7 @@ void test_callable_registration_integration() {
                                     .translation_units = indexed.translation_units},
                                    indexed.diagnostics);
     const auto artifact = cxx_dead::json::parse(artifact_output.str());
-    require(artifact.find("artifact_schema_version")->as_number() == 3.0 &&
+    require(artifact.find("artifact_schema_version")->as_number() == 4.0 &&
                 std::ranges::any_of(artifact.find("edges")->as_array(),
                                     [](const auto& edge) {
                                         return edge.string_or("kind") == "callback_registration";
@@ -594,7 +597,9 @@ void test_callable_registration_integration() {
                     .manual_roots = {"callable_fixture::run"},
                     .callback_registration_rules =
                         {
-                            {.callee = "callable_fixture::missing_registrar", .argument_index = 0},
+                            {.callee =
+                                 cxx_dead::SymbolSelector{"callable_fixture::missing_registrar"},
+                             .argument_index = 0},
                         },
                 })
                 .index(commands));
@@ -603,6 +608,149 @@ void test_callable_registration_integration() {
         require(std::string(error.what()).contains("did not match a registrar call"),
                 "unmatched callback registration rule did not fail clearly");
     }
+}
+
+void test_yaml_provider_integration() {
+    const auto fixture = std::filesystem::path(CXX_DEAD_PROVIDER_FIXTURE_DIR);
+    const auto policy = cxx_dead::load_provider_config(fixture / "provider.yaml");
+    require(policy.provider == "project_policy" && policy.roots.size() == 2U &&
+                policy.edges.size() == 1U && policy.escapes.size() == 1U &&
+                policy.suppressions.size() == 1U && policy.callback_registrations.size() == 1U,
+            "YAML provider did not load every typed fact");
+
+    for (const auto& [file, expected] : std::vector<std::pair<std::string, std::string>>{
+             {"invalid-unknown.yaml", "unknown key"},
+             {"invalid-selector.yaml", "exactly one"},
+             {"invalid-duplicate.yaml", "duplicate key"},
+         }) {
+        try {
+            static_cast<void>(cxx_dead::load_provider_config(fixture / file));
+            throw std::runtime_error("invalid provider configuration unexpectedly loaded: " + file);
+        } catch (const std::exception& error) {
+            require(std::string(error.what()).contains(expected),
+                    "invalid provider configuration did not fail precisely");
+        }
+    }
+
+    const auto source = fixture / "main.cpp";
+    const std::vector<cxx_dead::CompileCommand> commands{{
+        .directory = fixture,
+        .file = source,
+        .arguments = {"clang++", "-std=c++23", "-c", source.string(), "-o", "ignored.o"},
+    }};
+    auto indexed =
+        cxx_dead::ClangAstIndexer({
+                                      .project_root = fixture,
+                                      .ast_filter = "provider_fixture",
+                                      .callback_registration_rules = policy.callback_registrations,
+                                      .provider_policies = {policy},
+                                  })
+            .index(commands);
+    const auto reachability = cxx_dead::analyze_reachability(indexed.graph);
+    const auto report = cxx_dead::build_report(indexed.graph, reachability);
+
+    const auto plugin_entry = find_symbol(indexed.graph, "provider_fixture::plugin_entry");
+    const auto plugin_leaf = find_symbol(indexed.graph, "provider_fixture::plugin_leaf");
+    const auto registered = find_symbol(indexed.graph, "provider_fixture::registered_callback");
+    const auto escaped = find_symbol(indexed.graph, "provider_fixture::escaped_callback");
+    const auto suppressed = find_symbol(indexed.graph, "provider_fixture::suppressed_callback");
+    const auto ordinary = find_symbol(indexed.graph, "provider_fixture::ordinary_dead");
+    require(reachability.provider_reachable[plugin_entry] &&
+                reachability.provider_reachable[plugin_leaf] &&
+                reachability.provider_reachable[registered],
+            "provider root, edge, or callback registration did not retain its target");
+    require(!reachability.reachable[escaped] && !reachability.reachable[suppressed] &&
+                !reachability.reachable[ordinary],
+            "non-root provider facts unexpectedly changed reachability");
+    const auto escaped_finding = std::ranges::find_if(
+        report.findings, [&](const auto& finding) { return finding.symbol == escaped; });
+    require(escaped_finding != report.findings.end() &&
+                escaped_finding->classification == cxx_dead::Classification::DynamicallyReferenced,
+            "provider escape did not lower finding confidence");
+    require(
+        std::ranges::none_of(report.findings,
+                             [&](const auto& finding) { return finding.symbol == suppressed; }) &&
+            report.suppressed_findings.size() == 1U &&
+            report.suppressed_findings.front().finding.symbol == suppressed &&
+            report.suppressed_findings.front().suppressions.front().provider == "project_policy" &&
+            report.actionable_unreachable_symbols == report.findings.size(),
+        "provider suppression was not separated from actionable findings");
+
+    std::ostringstream report_output;
+    cxx_dead::write_json_report(report_output, indexed.graph, reachability, report,
+                                indexed.diagnostics);
+    const auto report_json = cxx_dead::json::parse(report_output.str());
+    require(report_json.find("schema_version")->as_number() == 9.0 &&
+                report_json.find("suppressed_findings")->as_array().size() == 1U &&
+                report_json.find("summary")->find("suppressed_symbols")->as_number() == 1.0,
+            "provider report schema omitted auditable suppressions");
+
+    std::ostringstream artifact_output;
+    cxx_dead::write_graph_artifact(artifact_output, indexed.graph,
+                                   {.configuration_id = "default",
+                                    .frontend = indexed.frontend,
+                                    .translation_units = indexed.translation_units},
+                                   indexed.diagnostics);
+    const auto artifact = cxx_dead::json::parse(artifact_output.str());
+    require(artifact.find("artifact_schema_version")->as_number() == 4.0 &&
+                artifact.find("suppressions")->as_array().size() == 1U,
+            "graph artifact omitted provider suppressions");
+
+    for (const auto& [file, expected] : std::vector<std::pair<std::string, std::string>>{
+             {"ambiguous.yaml", "matched 2 symbols"},
+             {"unmatched.yaml", "matched 0 symbols"},
+         }) {
+        try {
+            auto graph = indexed.graph;
+            cxx_dead::apply_provider_policies(graph,
+                                              {cxx_dead::load_provider_config(fixture / file)});
+            throw std::runtime_error("unresolvable provider selector unexpectedly applied: " +
+                                     file);
+        } catch (const std::exception& error) {
+            require(std::string(error.what()).contains(expected),
+                    "unresolvable provider selector did not fail clearly");
+        }
+    }
+
+    const auto additional = cxx_dead::load_provider_config(fixture / "additional.yaml");
+    const auto provider_base =
+        cxx_dead::ClangAstIndexer({
+                                      .project_root = fixture,
+                                      .ast_filter = "provider_fixture",
+                                      .manual_roots = {"provider_fixture::run_registration"},
+                                      .callback_registration_rules = policy.callback_registrations,
+                                  })
+            .index(commands)
+            .graph;
+    auto forward_graph = provider_base;
+    auto reverse_graph = provider_base;
+    cxx_dead::apply_provider_policies(forward_graph, {policy, additional});
+    cxx_dead::apply_provider_policies(reverse_graph, {additional, policy});
+    const auto artifact_metadata = cxx_dead::GraphArtifactMetadata{
+        .configuration_id = "default",
+        .frontend = indexed.frontend,
+        .translation_units = indexed.translation_units,
+    };
+    std::ostringstream forward_output;
+    std::ostringstream reverse_output;
+    cxx_dead::write_graph_artifact(forward_output, forward_graph, artifact_metadata, {});
+    cxx_dead::write_graph_artifact(reverse_output, reverse_graph, artifact_metadata, {});
+    require(forward_output.str() == reverse_output.str(),
+            "provider file order changed the canonical graph artifact");
+
+    const auto unconfigured =
+        cxx_dead::ClangAstIndexer({
+                                      .project_root = fixture,
+                                      .ast_filter = "provider_fixture",
+                                      .manual_roots = {"provider_fixture::run_registration"},
+                                  })
+            .index(commands);
+    const auto unconfigured_reachability = cxx_dead::analyze_reachability(unconfigured.graph);
+    require(!unconfigured_reachability
+                    .reachable[find_symbol(unconfigured.graph, "provider_fixture::plugin_entry")] &&
+                !unconfigured_reachability.reachable[find_symbol(
+                    unconfigured.graph, "provider_fixture::registered_callback")],
+            "provider fixture changed reachability without configuration");
 }
 
 void test_libtooling_availability_contract() {
@@ -671,6 +819,7 @@ int main() {
         test_clang_integration();
         test_implicit_construction_integration();
         test_callable_registration_integration();
+        test_yaml_provider_integration();
         test_process_limits_and_cancellation();
         test_libtooling_availability_contract();
         std::cout << "all cxx-dead tests passed\n";

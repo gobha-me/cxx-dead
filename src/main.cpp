@@ -3,6 +3,7 @@
 #include "cxx_dead/compile_database.h"
 #include "cxx_dead/graph.h"
 #include "cxx_dead/indexer.h"
+#include "cxx_dead/provider.h"
 #include "cxx_dead/report.h"
 
 #include <algorithm>
@@ -20,7 +21,6 @@
 #include <string>
 #include <string_view>
 #include <sys/resource.h>
-#include <tuple>
 
 namespace {
 
@@ -43,6 +43,7 @@ struct CliOptions {
     std::string ast_filter;
     std::vector<std::string> roots;
     std::vector<cxx_dead::CallbackRegistrationRule> callback_registration_rules;
+    std::vector<std::filesystem::path> provider_configs;
     std::chrono::milliseconds translation_unit_timeout{0};
     std::chrono::milliseconds index_timeout{0};
     std::size_t max_ast_bytes{0};
@@ -74,6 +75,7 @@ Options:
   --callback-registration CALLEE:INDEX
                            Treat zero-based callback argument INDEX as provider-reachable
                            when CALLEE executes (repeatable)
+  --provider-config PATH   Load a versioned YAML reachability provider (repeatable)
   --frontend NAME          Index frontend: ast-json or libtooling (default: ast-json)
   --clang PATH              Clang executable used for AST indexing (default: clang++)
   --ast-filter TEXT         Experimental frontend declaration-name filter
@@ -110,7 +112,8 @@ cxx_dead::CallbackRegistrationRule parse_callback_registration(std::string_view 
         throw std::runtime_error(
             "--callback-registration must use CALLEE:INDEX with a zero-based index");
     }
-    return {.callee = std::string(value.substr(0, separator)), .argument_index = argument_index};
+    return {.callee = cxx_dead::SymbolSelector{value.substr(0, separator)},
+            .argument_index = argument_index};
 }
 
 CliOptions parse_cli(int count, char** arguments) {
@@ -122,7 +125,7 @@ CliOptions parse_cli(int count, char** arguments) {
             std::exit(0);
         }
         if (argument == "--version") {
-            std::cout << "cxx-dead 0.10.0\n";
+            std::cout << "cxx-dead 0.11.0\n";
             std::exit(0);
         }
         if (argument == "--compile-commands") {
@@ -158,6 +161,8 @@ CliOptions parse_cli(int count, char** arguments) {
         } else if (argument == "--callback-registration") {
             options.callback_registration_rules.push_back(
                 parse_callback_registration(require_value(index, count, arguments, argument)));
+        } else if (argument == "--provider-config") {
+            options.provider_configs.emplace_back(require_value(index, count, arguments, argument));
         } else if (argument == "--frontend") {
             const auto frontend = require_value(index, count, arguments, argument);
             if (frontend == "ast-json")
@@ -254,11 +259,12 @@ CliOptions parse_cli(int count, char** arguments) {
         options.translation_unit_root =
             std::filesystem::absolute(*options.translation_unit_root).lexically_normal();
     }
-    std::ranges::sort(options.callback_registration_rules, {}, [](const auto& rule) {
-        return std::tuple{rule.callee, rule.argument_index};
-    });
-    const auto duplicate = std::ranges::unique(options.callback_registration_rules);
-    options.callback_registration_rules.erase(duplicate.begin(), duplicate.end());
+    for (auto& path : options.provider_configs)
+        path = std::filesystem::absolute(path).lexically_normal();
+    std::ranges::sort(options.provider_configs);
+    options.provider_configs.erase(std::ranges::unique(options.provider_configs).begin(),
+                                   options.provider_configs.end());
+    cxx_dead::canonicalize_callback_registration_rules(options.callback_registration_rules);
     return options;
 }
 
@@ -291,6 +297,15 @@ int main(int argc, char** argv) {
         if (options.frontend == cxx_dead::IndexFrontend::LibTooling && options.clang_explicit) {
             throw std::runtime_error("--clang applies only to --frontend ast-json");
         }
+        std::vector<cxx_dead::ProviderPolicy> provider_policies;
+        for (const auto& path : options.provider_configs) {
+            auto policy = cxx_dead::load_provider_config(path);
+            options.callback_registration_rules.insert(options.callback_registration_rules.end(),
+                                                       policy.callback_registrations.begin(),
+                                                       policy.callback_registrations.end());
+            provider_policies.push_back(std::move(policy));
+        }
+        cxx_dead::canonicalize_callback_registration_rules(options.callback_registration_rules);
         auto commands = cxx_dead::load_compilation_database(options.compilation_database);
         std::optional<cxx_dead::TargetSelection> target_selection;
         if (options.cmake_build_directory.has_value() || options.target_manifest.has_value()) {
@@ -324,6 +339,7 @@ int main(int argc, char** argv) {
             .ast_filter = options.ast_filter,
             .manual_roots = options.roots,
             .callback_registration_rules = options.callback_registration_rules,
+            .provider_policies = provider_policies,
             .translation_unit_timeout = options.translation_unit_timeout,
             .index_timeout = options.index_timeout,
             .max_ast_bytes = options.max_ast_bytes,

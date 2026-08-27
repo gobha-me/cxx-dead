@@ -1,0 +1,6 @@
+schema_version: 1
+provider: additional_policy
+roots:
+  - symbol:
+      qualified_name: provider_fixture::ordinary_dead
+    reason: secondary provider entry point

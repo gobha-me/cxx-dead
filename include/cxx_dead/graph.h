@@ -32,6 +32,7 @@ enum class EdgeKind {
     Constructs,
     VirtualDispatch,
     CallbackRegistration,
+    Provider,
 };
 
 enum class RootKind {
@@ -39,11 +40,13 @@ enum class RootKind {
     GlobalInitializer,
     Manual,
     CallbackRegistration,
+    Provider,
 };
 
 enum class EscapeKind {
     AddressTaken,
     CallableObject,
+    Provider,
 };
 
 enum class IdentityQuality {
@@ -123,6 +126,11 @@ struct Escape {
     Evidence evidence;
 };
 
+struct Suppression {
+    SymbolId symbol{};
+    Evidence evidence;
+};
+
 class Graph {
   public:
     SymbolId add_or_merge_symbol(Symbol symbol);
@@ -130,6 +138,7 @@ class Graph {
     void add_root(SymbolId id, RootKind kind, Evidence evidence);
     void add_escape(SymbolId id, EscapeKind kind, Evidence evidence,
                     std::optional<SymbolId> from = std::nullopt);
+    void add_suppression(SymbolId id, Evidence evidence);
     void canonicalize();
 
     [[nodiscard]] std::optional<SymbolId> find_by_key(std::string_view key) const;
@@ -148,6 +157,9 @@ class Graph {
     [[nodiscard]] const std::vector<Escape>& escapes() const {
         return escapes_;
     }
+    [[nodiscard]] const std::vector<Suppression>& suppressions() const {
+        return suppressions_;
+    }
 
   private:
     std::vector<Symbol> symbols_;
@@ -155,6 +167,7 @@ class Graph {
     std::unordered_map<std::string, SymbolId> key_to_id_;
     std::vector<Root> roots_;
     std::vector<Escape> escapes_;
+    std::vector<Suppression> suppressions_;
 };
 
 struct ReachabilityResult {
@@ -165,6 +178,8 @@ struct ReachabilityResult {
 };
 
 [[nodiscard]] bool is_traversable(EdgeKind kind);
+[[nodiscard]] bool is_provider(EdgeKind kind);
+[[nodiscard]] bool is_provider(RootKind kind);
 [[nodiscard]] bool has_indexed_body(SymbolScope scope);
 [[nodiscard]] bool is_reportable(SymbolScope scope);
 [[nodiscard]] const SourceExtent& primary_source_extent(const Symbol& symbol);

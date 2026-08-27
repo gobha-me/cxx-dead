@@ -1,0 +1,28 @@
+schema_version: 1
+provider: project_policy
+roots:
+  - symbol:
+      qualified_name: provider_fixture::plugin_entry
+    reason: runtime plugin entry point
+  - symbol:
+      qualified_name: provider_fixture::run_registration
+    reason: runtime initializes the registration subsystem
+edges:
+  - from:
+      qualified_name: provider_fixture::plugin_entry
+    to:
+      qualified_name: provider_fixture::plugin_leaf
+    reason: runtime plugin dispatch
+escapes:
+  - symbol:
+      qualified_name: provider_fixture::escaped_callback
+    reason: callback address escapes through external storage
+suppressions:
+  - symbol:
+      qualified_name: provider_fixture::suppressed_callback
+    reason: retained for compatibility with deployed plugins
+callback_registrations:
+  - callee:
+      qualified_name: provider_fixture::registrar
+    argument_index: 0
+    reason: registrar owns callback argument zero

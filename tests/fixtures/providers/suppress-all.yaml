@@ -1,0 +1,17 @@
+schema_version: 1
+provider: advisory_policy
+suppressions:
+  - symbol:
+      qualified_name: provider_fixture::escaped_callback
+    reason: test policy suppression
+  - symbol:
+      qualified_name: provider_fixture::ordinary_dead
+    reason: test policy suppression
+  - symbol:
+      qualified_name: provider_fixture::overloaded
+      signature: void ()
+    reason: test policy suppression
+  - symbol:
+      qualified_name: provider_fixture::overloaded
+      signature: void (int)
+    reason: test policy suppression

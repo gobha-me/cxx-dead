@@ -101,6 +101,16 @@ void write_graph_artifact(std::ostream& output, const Graph& graph,
                std::tuple{graph.symbols()[right->symbol].key, right_from, right->kind,
                           right->evidence.provider, right->evidence.reason};
     });
+    std::vector<const Suppression*> suppressions;
+    suppressions.reserve(graph.suppressions().size());
+    for (const auto& suppression : graph.suppressions())
+        suppressions.push_back(&suppression);
+    std::ranges::sort(suppressions, [&](const Suppression* left, const Suppression* right) {
+        return std::tuple{graph.symbols()[left->symbol].key, left->evidence.provider,
+                          left->evidence.reason} < std::tuple{graph.symbols()[right->symbol].key,
+                                                              right->evidence.provider,
+                                                              right->evidence.reason};
+    });
     auto sorted_diagnostics = diagnostics;
     std::ranges::sort(sorted_diagnostics);
     const auto duplicate = std::ranges::unique(sorted_diagnostics);
@@ -200,6 +210,16 @@ void write_graph_artifact(std::ostream& output, const Graph& graph,
         output << '}';
     }
     if (!escapes.empty())
+        output << '\n';
+    output << "  ],\n  \"suppressions\": [";
+    for (std::size_t index = 0; index < suppressions.size(); ++index) {
+        const auto& suppression = *suppressions[index];
+        output << (index == 0 ? "\n" : ",\n") << "    {\"symbol\": \""
+               << json::escape(graph.symbols()[suppression.symbol].key) << "\", \"evidence\": ";
+        write_evidence(output, suppression.evidence);
+        output << '}';
+    }
+    if (!suppressions.empty())
         output << '\n';
     output << "  ],\n  \"diagnostics\": [";
     for (std::size_t index = 0; index < sorted_diagnostics.size(); ++index) {

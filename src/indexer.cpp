@@ -604,8 +604,7 @@ std::vector<SymbolId> resolve_callable_targets(const Value& expression,
 }
 
 bool rule_matches(const Symbol& symbol, const CallbackRegistrationRule& rule) {
-    return symbol.qualified_name == rule.callee || symbol.identity.linkage_name == rule.callee ||
-           symbol.key == rule.callee;
+    return matches(symbol, rule.callee);
 }
 
 std::string referenced_variable_id(const Value& expression) {
@@ -644,6 +643,9 @@ void add_use(TranslationUnitState& state, std::optional<SymbolId> caller, Symbol
                 break;
             case EdgeKind::CallbackRegistration:
                 reason = "configured callback registration";
+                break;
+            case EdgeKind::Provider:
+                reason = "configured provider edge";
                 break;
             }
         }
@@ -782,29 +784,34 @@ void collect_uses(const Value& node, TranslationUnitState& state, std::optional<
                     continue;
                 state.registration_rule_matches[rule_index] = true;
                 if (rule.argument_index + 1U >= inner.size()) {
-                    throw std::runtime_error("callback registration rule " + rule.callee + ":" +
-                                             std::to_string(rule.argument_index) +
+                    throw std::runtime_error("callback registration rule " + describe(rule.callee) +
+                                             ":" + std::to_string(rule.argument_index) +
                                              " exceeds the registrar argument list");
                 }
                 const auto callbacks =
                     resolve_callable_targets(inner[rule.argument_index + 1U], state);
                 if (callbacks.empty()) {
-                    throw std::runtime_error("callback registration rule " + rule.callee + ":" +
-                                             std::to_string(rule.argument_index) +
+                    throw std::runtime_error("callback registration rule " + describe(rule.callee) +
+                                             ":" + std::to_string(rule.argument_index) +
                                              " did not resolve a callable argument");
                 }
-                const auto reason = "configured callback argument " +
-                                    std::to_string(rule.argument_index) + " of " + rule.callee;
+                auto evidence = rule.evidence;
+                if (evidence.provider.empty())
+                    evidence.provider = "callback_registration";
+                if (evidence.reason.empty()) {
+                    evidence.reason = "configured callback argument " +
+                                      std::to_string(rule.argument_index) + " of " +
+                                      describe(rule.callee);
+                }
                 for (const auto callback : callbacks) {
                     if (caller.has_value()) {
-                        state.graph.add_edge(
-                            *caller, callback, EdgeKind::CallbackRegistration,
-                            {.provider = "callback_registration", .reason = reason});
+                        state.graph.add_edge(*caller, callback, EdgeKind::CallbackRegistration,
+                                             evidence);
                     } else if (global_initializer) {
-                        state.graph.add_root(
-                            callback, RootKind::CallbackRegistration,
-                            {.provider = "callback_registration",
-                             .reason = reason + " from a namespace-scope initializer"});
+                        auto root_evidence = evidence;
+                        root_evidence.reason += " from a namespace-scope initializer";
+                        state.graph.add_root(callback, RootKind::CallbackRegistration,
+                                             std::move(root_evidence));
                     }
                 }
             }
@@ -1239,7 +1246,8 @@ IndexResult ClangAstIndexer::index(const std::vector<CompileCommand>& commands) 
         if (!registration_rule_matches[index]) {
             const auto& rule = options_.callback_registration_rules[index];
             throw IndexingError("callback registration rule did not match a registrar call: " +
-                                    rule.callee + ":" + std::to_string(rule.argument_index),
+                                    describe(rule.callee) + ":" +
+                                    std::to_string(rule.argument_index),
                                 {.state = RunState::Incomplete,
                                  .frontend = result.frontend,
                                  .partial_graph_discarded = true,
@@ -1262,11 +1270,20 @@ IndexResult ClangAstIndexer::index(const std::vector<CompileCommand>& commands) 
         if (!matched)
             result.diagnostics.push_back("configured root did not match a symbol: " + requested);
     }
+    try {
+        apply_provider_policies(result.graph, options_.provider_policies);
+    } catch (const std::exception& error) {
+        throw IndexingError("could not apply reachability provider: " + std::string(error.what()),
+                            {.state = RunState::Incomplete,
+                             .frontend = result.frontend,
+                             .partial_graph_discarded = true,
+                             .translation_units = result.translation_unit_diagnostics});
+    }
     if (!options_.ast_filter.empty())
         result.diagnostics.push_back("Clang AST name filter active: " + options_.ast_filter);
     if (result.graph.roots().empty()) {
         throw IndexingError(
-            "no application roots found; include main() or provide a matching --root symbol",
+            "no application roots found; include main(), --root, or a provider root",
             {.state = RunState::Incomplete,
              .frontend = result.frontend,
              .partial_graph_discarded = true,

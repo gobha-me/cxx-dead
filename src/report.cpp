@@ -225,11 +225,24 @@ AnalysisReport build_report(const Graph& graph, const ReachabilityResult& result
                 ++report.structurally_reachable_symbols;
         } else {
             ++report.unreachable_symbols;
-            report.findings.push_back(classify(graph, id, symbol));
+            auto finding = classify(graph, id, symbol);
+            std::vector<Evidence> suppressions;
+            for (const auto& suppression : graph.suppressions()) {
+                if (suppression.symbol == id)
+                    suppressions.push_back(suppression.evidence);
+            }
+            if (suppressions.empty()) {
+                ++report.actionable_unreachable_symbols;
+                report.findings.push_back(std::move(finding));
+            } else {
+                ++report.suppressed_symbols;
+                report.suppressed_findings.push_back(
+                    {.finding = std::move(finding), .suppressions = std::move(suppressions)});
+            }
         }
     }
     for (const auto& edge : graph.edges()) {
-        if (edge.kind != EdgeKind::CallbackRegistration || !result.reachable[edge.from] ||
+        if (!is_provider(edge.kind) || !result.reachable[edge.from] ||
             !result.provider_reachable[edge.to]) {
             continue;
         }
@@ -243,8 +256,7 @@ AnalysisReport build_report(const Graph& graph, const ReachabilityResult& result
         }
     }
     for (const auto& root : graph.roots()) {
-        if (root.kind != RootKind::CallbackRegistration ||
-            !result.provider_reachable[root.symbol]) {
+        if (!is_provider(root.kind) || !result.provider_reachable[root.symbol]) {
             continue;
         }
         const auto& symbol = graph.symbols()[root.symbol];
@@ -281,6 +293,16 @@ AnalysisReport build_report(const Graph& graph, const ReachabilityResult& result
         if (lhs.qualified_name != rhs.qualified_name)
             return lhs.qualified_name < rhs.qualified_name;
         return lhs.signature < rhs.signature;
+    });
+    std::ranges::sort(report.suppressed_findings, [&](const SuppressedFinding& left,
+                                                      const SuppressedFinding& right) {
+        const auto& lhs = graph.symbols()[left.finding.symbol];
+        const auto& rhs = graph.symbols()[right.finding.symbol];
+        const auto& lhs_location = primary_source_extent(lhs).location;
+        const auto& rhs_location = primary_source_extent(rhs).location;
+        return std::tuple{lhs_location.file.string(), lhs_location.line, lhs.qualified_name,
+                          lhs.signature} < std::tuple{rhs_location.file.string(), rhs_location.line,
+                                                      rhs.qualified_name, rhs.signature};
     });
     return report;
 }
@@ -342,7 +364,9 @@ void write_human_report(std::ostream& output, const Graph& graph,
            << "  Reachable:                 " << report.reachable_symbols << " ("
            << report.structurally_reachable_symbols << " structural, "
            << report.provider_reachable_symbols << " provider)\n"
-           << "  Unreachable candidates:    " << report.unreachable_symbols << "\n\n";
+           << "  Unreachable candidates:    " << report.unreachable_symbols << " ("
+           << report.actionable_unreachable_symbols << " actionable, " << report.suppressed_symbols
+           << " suppressed)\n\n";
 
     output << "ROOTS\n";
     for (const auto& root : graph.roots()) {
@@ -355,7 +379,7 @@ void write_human_report(std::ostream& output, const Graph& graph,
     output << '\n';
 
     if (!report.provider_reachable.empty()) {
-        output << "PROVIDER-REACHABLE CALLBACKS\n";
+        output << "PROVIDER-REACHABLE SYMBOLS\n";
         for (const auto& retained : report.provider_reachable) {
             const auto& symbol = graph.symbols()[retained.symbol];
             output << "  " << display_symbol(symbol) << "\n";
@@ -370,11 +394,16 @@ void write_human_report(std::ostream& output, const Graph& graph,
     }
 
     if (report.findings.empty()) {
-        output << "No unreachable function definitions found.\n";
+        output << "No actionable unreachable function definitions found.\n";
     } else {
         const auto dead_types = fully_unreachable_types(graph, reachability);
+        auto actionable_types = dead_types;
+        std::erase_if(actionable_types, [&](const auto& entry) {
+            return std::ranges::any_of(
+                entry.second, [&](SymbolId id) { return find_finding(report, id) == nullptr; });
+        });
         std::set<SymbolId> type_members;
-        for (const auto& [type, members] : dead_types) {
+        for (const auto& [type, members] : actionable_types) {
             output << "UNREACHABLE TYPE\n\n" << type << '\n';
             if (!members.empty())
                 output << "Location: "
@@ -397,8 +426,9 @@ void write_human_report(std::ostream& output, const Graph& graph,
 
         for (const auto& component : reachability.unreachable_sccs) {
             std::vector<SymbolId> visible;
-            std::ranges::copy_if(component, std::back_inserter(visible),
-                                 [&](SymbolId id) { return !type_members.contains(id); });
+            std::ranges::copy_if(component, std::back_inserter(visible), [&](SymbolId id) {
+                return !type_members.contains(id) && find_finding(report, id) != nullptr;
+            });
             if (visible.empty())
                 continue;
             output << (visible.size() > 1U ? "UNREACHABLE COMPONENT\n\n"
@@ -424,6 +454,23 @@ void write_human_report(std::ostream& output, const Graph& graph,
         }
     }
 
+    if (!report.suppressed_findings.empty()) {
+        output << "SUPPRESSED FINDINGS\n\n";
+        for (const auto& suppressed : report.suppressed_findings) {
+            const auto& symbol = graph.symbols()[suppressed.finding.symbol];
+            output << display_symbol(symbol) << '\n';
+            write_human_source(output, symbol, "  ");
+            output << "  Original classification: " << to_string(suppressed.finding.classification)
+                   << "\n"
+                   << "  Original evidence:\n";
+            write_human_evidence(output, graph, suppressed.finding.evidence, "    ");
+            output << "  Suppression evidence:\n";
+            for (const auto& evidence : suppressed.suppressions)
+                output << "    - " << evidence.provider << ": " << evidence.reason << '\n';
+            output << '\n';
+        }
+    }
+
     if (!diagnostics.empty()) {
         output << "DIAGNOSTICS\n";
         for (const auto& diagnostic : diagnostics)
@@ -441,6 +488,63 @@ void write_json_report(std::ostream& output, const Graph& graph,
             component_by_symbol[symbol] = static_cast<int>(component);
         }
     }
+
+    const auto write_finding = [&](const Finding& finding,
+                                   const std::vector<Evidence>* suppressions) {
+        const auto& symbol = graph.symbols()[finding.symbol];
+        const auto& source = primary_source_extent(symbol).location;
+        output << "    {\n"
+               << "      \"symbol\": \"" << json::escape(symbol.qualified_name) << "\",\n"
+               << "      \"signature\": \"" << json::escape(symbol.signature) << "\",\n"
+               << "      \"key\": \"" << json::escape(symbol.key) << "\",\n"
+               << "      \"kind\": \"" << to_string(symbol.kind) << "\",\n"
+               << "      \"scope\": \"" << to_string(symbol.scope) << "\",\n"
+               << "      \"file\": \"" << json::escape(source.file.string()) << "\",\n"
+               << "      \"line\": " << source.line << ",\n"
+               << "      \"source\": ";
+        write_json_source(output, symbol.source);
+        output << ",\n"
+               << "      \"classification\": \"" << to_string(finding.classification) << "\",\n"
+               << "      \"confidence\": " << std::fixed << std::setprecision(2)
+               << finding.confidence << ",\n"
+               << "      \"component\": " << component_by_symbol[finding.symbol] << ",\n"
+               << "      \"evidence\": [";
+        for (std::size_t index = 0; index < finding.evidence.size(); ++index) {
+            const auto& item = finding.evidence[index];
+            output << (index == 0 ? "\n" : ",\n") << "        {\n"
+                   << "          \"kind\": \"" << to_string(item.kind) << "\",\n"
+                   << "          \"provider\": \"" << json::escape(item.evidence.provider)
+                   << "\",\n"
+                   << "          \"reason\": \"" << json::escape(item.evidence.reason) << "\"";
+            if (item.escape_kind.has_value())
+                output << ",\n          \"escape_kind\": \"" << to_string(*item.escape_kind)
+                       << "\"";
+            if (item.from.has_value()) {
+                const auto& from = graph.symbols()[*item.from];
+                output << ",\n          \"from_symbol\": \"" << json::escape(from.qualified_name)
+                       << "\",\n"
+                       << "          \"from_signature\": \"" << json::escape(from.signature)
+                       << "\"";
+            }
+            output << "\n        }";
+        }
+        if (!finding.evidence.empty())
+            output << '\n';
+        output << "      ]";
+        if (suppressions != nullptr) {
+            output << ",\n      \"suppression_evidence\": [";
+            for (std::size_t index = 0; index < suppressions->size(); ++index) {
+                const auto& evidence = (*suppressions)[index];
+                output << (index == 0 ? "\n" : ",\n") << "        {\"provider\": \""
+                       << json::escape(evidence.provider) << "\", \"reason\": \""
+                       << json::escape(evidence.reason) << "\"}";
+            }
+            if (!suppressions->empty())
+                output << '\n';
+            output << "      ]";
+        }
+        output << "\n    }";
+    };
 
     output << "{\n"
            << "  \"schema_version\": " << report_schema_version << ",\n"
@@ -478,6 +582,9 @@ void write_json_report(std::ostream& output, const Graph& graph,
            << ",\n"
            << "    \"provider_reachable_symbols\": " << report.provider_reachable_symbols << ",\n"
            << "    \"unreachable_symbols\": " << report.unreachable_symbols << ",\n"
+           << "    \"actionable_unreachable_symbols\": " << report.actionable_unreachable_symbols
+           << ",\n"
+           << "    \"suppressed_symbols\": " << report.suppressed_symbols << ",\n"
            << "    \"scope_counts\": {\n"
            << "      \"reportable\": " << report.reportable_symbols << ",\n"
            << "      \"indexed\": " << report.indexed_symbols << ",\n"
@@ -532,52 +639,18 @@ void write_json_report(std::ostream& output, const Graph& graph,
     output << "  ],\n"
            << "  \"findings\": [";
     for (std::size_t index = 0; index < report.findings.size(); ++index) {
-        const auto& finding = report.findings[index];
-        const auto& symbol = graph.symbols()[finding.symbol];
-        const auto& source = primary_source_extent(symbol).location;
-        output << (index == 0 ? "\n" : ",\n") << "    {\n"
-               << "      \"symbol\": \"" << json::escape(symbol.qualified_name) << "\",\n"
-               << "      \"signature\": \"" << json::escape(symbol.signature) << "\",\n"
-               << "      \"key\": \"" << json::escape(symbol.key) << "\",\n"
-               << "      \"kind\": \"" << to_string(symbol.kind) << "\",\n"
-               << "      \"scope\": \"" << to_string(symbol.scope) << "\",\n"
-               << "      \"file\": \"" << json::escape(source.file.string()) << "\",\n"
-               << "      \"line\": " << source.line << ",\n"
-               << "      \"source\": ";
-        write_json_source(output, symbol.source);
-        output << ",\n"
-               << "      \"classification\": \"" << to_string(finding.classification) << "\",\n"
-               << "      \"confidence\": " << std::fixed << std::setprecision(2)
-               << finding.confidence << ",\n"
-               << "      \"component\": " << component_by_symbol[finding.symbol] << ",\n"
-               << "      \"evidence\": [";
-        for (std::size_t evidence_index = 0; evidence_index < finding.evidence.size();
-             ++evidence_index) {
-            const auto& item = finding.evidence[evidence_index];
-            output << (evidence_index == 0 ? "\n" : ",\n") << "        {\n"
-                   << "          \"kind\": \"" << to_string(item.kind) << "\",\n"
-                   << "          \"provider\": \"" << json::escape(item.evidence.provider)
-                   << "\",\n"
-                   << "          \"reason\": \"" << json::escape(item.evidence.reason) << "\"";
-            if (item.escape_kind.has_value()) {
-                output << ",\n          \"escape_kind\": \"" << to_string(*item.escape_kind)
-                       << "\"";
-            }
-            if (item.from.has_value()) {
-                const auto& from = graph.symbols()[*item.from];
-                output << ",\n          \"from_symbol\": \"" << json::escape(from.qualified_name)
-                       << "\",\n"
-                       << "          \"from_signature\": \"" << json::escape(from.signature)
-                       << "\"";
-            }
-            output << "\n        }";
-        }
-        if (!finding.evidence.empty())
-            output << '\n';
-        output << "      ]\n"
-               << "    }";
+        output << (index == 0 ? "\n" : ",\n");
+        write_finding(report.findings[index], nullptr);
     }
     if (!report.findings.empty())
+        output << '\n';
+    output << "  ],\n  \"suppressed_findings\": [";
+    for (std::size_t index = 0; index < report.suppressed_findings.size(); ++index) {
+        output << (index == 0 ? "\n" : ",\n");
+        const auto& suppressed = report.suppressed_findings[index];
+        write_finding(suppressed.finding, &suppressed.suppressions);
+    }
+    if (!report.suppressed_findings.empty())
         output << '\n';
     output << "  ],\n  \"diagnostics\": [";
     for (std::size_t index = 0; index < diagnostics.size(); ++index) {

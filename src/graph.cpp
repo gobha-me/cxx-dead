@@ -203,7 +203,7 @@ std::optional<SymbolId> Graph::find_by_key(std::string_view key) const {
 
 bool is_traversable(EdgeKind kind) {
     return kind == EdgeKind::DirectCall || kind == EdgeKind::Constructs ||
-           kind == EdgeKind::VirtualDispatch;
+           kind == EdgeKind::VirtualDispatch || kind == EdgeKind::CallbackRegistration;
 }
 
 bool has_indexed_body(SymbolScope scope) {
@@ -317,30 +317,46 @@ std::size_t graph_fact_bytes(const Graph& graph) {
 ReachabilityResult analyze_reachability(const Graph& graph) {
     const auto count = graph.symbols().size();
     std::vector<std::vector<SymbolId>> adjacency(count);
+    std::vector<std::vector<SymbolId>> structural_adjacency(count);
     for (const auto& edge : graph.edges()) {
-        if (is_traversable(edge.kind) && has_indexed_body(graph.symbols()[edge.from].scope))
+        if (is_traversable(edge.kind) && has_indexed_body(graph.symbols()[edge.from].scope)) {
             adjacency[edge.from].push_back(edge.to);
+            if (edge.kind != EdgeKind::CallbackRegistration)
+                structural_adjacency[edge.from].push_back(edge.to);
+        }
     }
 
     ReachabilityResult result;
-    result.reachable.assign(count, false);
-    std::vector<SymbolId> stack;
-    stack.reserve(graph.roots().size());
-    for (const auto& root : graph.roots()) {
-        if (!result.reachable[root.symbol]) {
-            result.reachable[root.symbol] = true;
-            stack.push_back(root.symbol);
-        }
-    }
-    while (!stack.empty()) {
-        const auto current = stack.back();
-        stack.pop_back();
-        for (const auto next : adjacency[current]) {
-            if (!result.reachable[next]) {
-                result.reachable[next] = true;
-                stack.push_back(next);
+    const auto traverse = [&](const std::vector<std::vector<SymbolId>>& edges,
+                              bool include_provider_roots) {
+        std::vector<bool> reachable(count, false);
+        std::vector<SymbolId> stack;
+        stack.reserve(graph.roots().size());
+        for (const auto& root : graph.roots()) {
+            if (!include_provider_roots && root.kind == RootKind::CallbackRegistration)
+                continue;
+            if (!reachable[root.symbol]) {
+                reachable[root.symbol] = true;
+                stack.push_back(root.symbol);
             }
         }
+        while (!stack.empty()) {
+            const auto current = stack.back();
+            stack.pop_back();
+            for (const auto next : edges[current]) {
+                if (!reachable[next]) {
+                    reachable[next] = true;
+                    stack.push_back(next);
+                }
+            }
+        }
+        return reachable;
+    };
+    result.structurally_reachable = traverse(structural_adjacency, false);
+    result.reachable = traverse(adjacency, true);
+    result.provider_reachable.resize(count, false);
+    for (SymbolId id = 0; id < count; ++id) {
+        result.provider_reachable[id] = result.reachable[id] && !result.structurally_reachable[id];
     }
 
     const auto is_candidate = [&](SymbolId id) {
@@ -447,6 +463,8 @@ std::string_view to_string(EdgeKind kind) {
         return "constructs";
     case EdgeKind::VirtualDispatch:
         return "virtual_dispatch";
+    case EdgeKind::CallbackRegistration:
+        return "callback_registration";
     }
     return "unknown";
 }
@@ -459,6 +477,8 @@ std::string_view to_string(RootKind kind) {
         return "global_initializer";
     case RootKind::Manual:
         return "manual";
+    case RootKind::CallbackRegistration:
+        return "callback_registration";
     }
     return "unknown";
 }
@@ -467,6 +487,8 @@ std::string_view to_string(EscapeKind kind) {
     switch (kind) {
     case EscapeKind::AddressTaken:
         return "address_taken";
+    case EscapeKind::CallableObject:
+        return "callable_object";
     }
     return "unknown";
 }

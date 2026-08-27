@@ -143,6 +143,34 @@ void test_construction_frontend_parity() {
             "construction frontends produced different unsupported-factory diagnostics");
 }
 
+void test_callable_frontend_parity() {
+    const auto fixture = std::filesystem::path(CXX_DEAD_CALLABLE_FIXTURE_DIR);
+    const auto source = fixture / "main.cpp";
+    const std::vector<cxx_dead::CompileCommand> commands{{
+        .directory = fixture,
+        .file = source,
+        .arguments = {"clang++", "-std=c++23", "-c", source.string(), "-o", "ignored.o"},
+    }};
+    const cxx_dead::IndexOptions options{
+        .project_root = fixture,
+        .ast_filter = "callable_fixture",
+        .manual_roots = {"callable_fixture::run"},
+        .callback_registration_rules =
+            {
+                {.callee = "callable_fixture::member_registrar", .argument_index = 0},
+                {.callee = "callable_fixture::registrar", .argument_index = 0},
+            },
+    };
+    const auto ast = cxx_dead::ClangAstIndexer(options).index(commands);
+    const auto tooling = cxx_dead::LibToolingIndexer(options).index(commands);
+    require(report_json(ast) == report_json(tooling),
+            "callable LibTooling report differs from AST JSON report");
+    require(edge_facts(ast.graph) == edge_facts(tooling.graph),
+            "callable LibTooling edges differ from AST JSON edges\nAST:" +
+                joined(edge_facts(ast.graph)) +
+                "\nLibTooling:" + joined(edge_facts(tooling.graph)));
+}
+
 void test_exclusion_frontend_parity() {
     const auto fixture = std::filesystem::path(CXX_DEAD_GOLDEN_FIXTURE_DIR);
     const auto commands = cxx_dead::load_compilation_database(fixture / "compile_commands.json");
@@ -203,6 +231,7 @@ int main() {
         test_filtered_frontend_parity();
         test_scope_frontend_parity();
         test_construction_frontend_parity();
+        test_callable_frontend_parity();
         test_exclusion_frontend_parity();
         test_incomplete_libtooling_run_fails_closed();
         test_libtooling_hard_limits_are_explicitly_unsupported();

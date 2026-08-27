@@ -5,6 +5,7 @@
 #include <clang/AST/Decl.h>
 #include <clang/AST/DeclCXX.h>
 #include <clang/AST/DeclTemplate.h>
+#include <clang/AST/Expr.h>
 #include <clang/AST/ExprCXX.h>
 #include <clang/AST/Mangle.h>
 #include <clang/AST/RecursiveASTVisitor.h>
@@ -26,6 +27,7 @@
 #include <ranges>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -217,6 +219,9 @@ class TranslationUnitCollector {
                 case EdgeKind::VirtualDispatch:
                     reason = "virtual dispatch";
                     break;
+                case EdgeKind::CallbackRegistration:
+                    reason = "configured callback registration";
+                    break;
                 }
             }
             graph_.add_edge(*caller, *target_id, kind,
@@ -228,14 +233,41 @@ class TranslationUnitCollector {
         }
     }
 
-    void add_escape(std::optional<SymbolId> caller, const clang::FunctionDecl* target) {
+    void add_escape(std::optional<SymbolId> caller, const clang::FunctionDecl* target,
+                    EscapeKind kind = EscapeKind::AddressTaken,
+                    std::string reason = "function referenced outside a callee position") {
         const auto target_id = add_declaration(target, true);
         if (!target_id.has_value())
             return;
-        graph_.add_escape(
-            *target_id, EscapeKind::AddressTaken,
-            {.provider = "clang_ast", .reason = "function referenced outside a callee position"},
-            caller);
+        graph_.add_escape(*target_id, kind, {.provider = "clang_ast", .reason = std::move(reason)},
+                          caller);
+    }
+
+    [[nodiscard]] bool matches_rule(const clang::FunctionDecl* declaration,
+                                    const CallbackRegistrationRule& rule) {
+        const auto id = add_declaration(declaration, true);
+        if (!id.has_value())
+            return false;
+        const auto& symbol = graph_.symbols()[*id];
+        return symbol.qualified_name == rule.callee ||
+               symbol.identity.linkage_name == rule.callee || symbol.key == rule.callee;
+    }
+
+    void add_registration(std::optional<SymbolId> caller, const clang::FunctionDecl* target,
+                          bool global_initializer, const CallbackRegistrationRule& rule) {
+        const auto target_id = add_declaration(target, true);
+        if (!target_id.has_value())
+            return;
+        const auto reason = "configured callback argument " + std::to_string(rule.argument_index) +
+                            " of " + rule.callee;
+        if (caller.has_value()) {
+            graph_.add_edge(*caller, *target_id, EdgeKind::CallbackRegistration,
+                            {.provider = "callback_registration", .reason = reason});
+        } else if (global_initializer) {
+            graph_.add_root(*target_id, RootKind::CallbackRegistration,
+                            {.provider = "callback_registration",
+                             .reason = reason + " from a namespace-scope initializer"});
+        }
     }
 
     void add_construction(std::optional<SymbolId> caller,
@@ -448,7 +480,8 @@ class TranslationUnitCollector {
 
 class UseVisitor : public clang::RecursiveASTVisitor<UseVisitor> {
   public:
-    explicit UseVisitor(TranslationUnitCollector& collector) : collector_(collector) {}
+    UseVisitor(TranslationUnitCollector& collector, std::vector<bool>& registration_rule_matches)
+        : collector_(collector), registration_rule_matches_(registration_rule_matches) {}
 
     bool shouldVisitTemplateInstantiations() const {
         return true;
@@ -508,9 +541,46 @@ class UseVisitor : public clang::RecursiveASTVisitor<UseVisitor> {
     bool VisitCallExpr(clang::CallExpr* expression) {
         if (expression == nullptr)
             return true;
+        std::vector<const clang::FunctionDecl*> callees;
         if (const auto* target = expression->getDirectCallee()) {
+            callees.push_back(target);
             collector_.add_use(caller_, target, EdgeKind::DirectCall, global_initializer_);
             collector_.add_factory_construction(caller_, *expression, target, global_initializer_);
+        }
+        for (const auto* target : callable_targets(expression->getCallee())) {
+            if (std::ranges::find(callees, target) == callees.end()) {
+                callees.push_back(target);
+                collector_.add_use(caller_, target, EdgeKind::DirectCall, global_initializer_);
+            }
+        }
+        for (unsigned argument = 0; argument < expression->getNumArgs(); ++argument) {
+            for (const auto* target : callable_targets(expression->getArg(argument))) {
+                collector_.add_escape(caller_, target, EscapeKind::CallableObject,
+                                      "callable value passed outside a direct callee position");
+            }
+        }
+        for (std::size_t rule_index = 0;
+             rule_index < collector_.options().callback_registration_rules.size(); ++rule_index) {
+            const auto& rule = collector_.options().callback_registration_rules[rule_index];
+            if (!std::ranges::any_of(callees, [&](const clang::FunctionDecl* target) {
+                    return collector_.matches_rule(target, rule);
+                })) {
+                continue;
+            }
+            registration_rule_matches_[rule_index] = true;
+            if (rule.argument_index >= expression->getNumArgs()) {
+                throw std::runtime_error("callback registration rule " + rule.callee + ":" +
+                                         std::to_string(rule.argument_index) +
+                                         " exceeds the registrar argument list");
+            }
+            const auto callbacks = callable_targets(expression->getArg(rule.argument_index));
+            if (callbacks.empty()) {
+                throw std::runtime_error("callback registration rule " + rule.callee + ":" +
+                                         std::to_string(rule.argument_index) +
+                                         " did not resolve a callable argument");
+            }
+            for (const auto* callback : callbacks)
+                collector_.add_registration(caller_, callback, global_initializer_, rule);
         }
         if (const auto* callee = expression->getCallee())
             direct_callee_expressions_.insert(callee->IgnoreParenImpCasts());
@@ -521,6 +591,26 @@ class UseVisitor : public clang::RecursiveASTVisitor<UseVisitor> {
         if (expression == nullptr)
             return true;
         collector_.add_construction(caller_, expression->getConstructor(), global_initializer_);
+        const auto* record = expression->getType()->getAsCXXRecordDecl();
+        if (record != nullptr && record->getQualifiedNameAsString() == "std::function") {
+            for (unsigned argument = 0; argument < expression->getNumArgs(); ++argument) {
+                for (const auto* target : callable_targets(expression->getArg(argument))) {
+                    collector_.add_escape(caller_, target, EscapeKind::CallableObject,
+                                          "callable value stored in std::function");
+                }
+            }
+        }
+        return true;
+    }
+
+    bool VisitBinaryOperator(clang::BinaryOperator* expression) {
+        if (expression == nullptr || !expression->isAssignmentOp())
+            return true;
+        const auto* left = expression->getLHS()->IgnoreParenImpCasts();
+        if (const auto* reference = llvm::dyn_cast<clang::DeclRefExpr>(left)) {
+            if (const auto* variable = llvm::dyn_cast<clang::VarDecl>(reference->getDecl()))
+                invalidated_variables_.insert(variable);
+        }
         return true;
     }
 
@@ -541,6 +631,59 @@ class UseVisitor : public clang::RecursiveASTVisitor<UseVisitor> {
     }
 
   private:
+    std::vector<const clang::FunctionDecl*> callable_targets(const clang::Expr* expression) {
+        std::unordered_set<const clang::VarDecl*> visited_variables;
+        std::vector<const clang::FunctionDecl*> result;
+        collect_callable_targets(expression, visited_variables, result);
+        return result;
+    }
+
+    void collect_callable_targets(const clang::Expr* expression,
+                                  std::unordered_set<const clang::VarDecl*>& visited_variables,
+                                  std::vector<const clang::FunctionDecl*>& output) {
+        if (expression == nullptr)
+            return;
+        expression = expression->IgnoreParenImpCasts();
+        const auto append = [&](const clang::FunctionDecl* target) {
+            if (target != nullptr && std::ranges::find(output, target) == output.end())
+                output.push_back(target);
+        };
+        if (const auto* lambda = llvm::dyn_cast<clang::LambdaExpr>(expression)) {
+            append(lambda->getCallOperator());
+            return;
+        }
+        if (const auto* reference = llvm::dyn_cast<clang::DeclRefExpr>(expression)) {
+            if (const auto* target = llvm::dyn_cast<clang::FunctionDecl>(reference->getDecl())) {
+                append(target);
+                return;
+            }
+            if (const auto* variable = llvm::dyn_cast<clang::VarDecl>(reference->getDecl());
+                variable != nullptr && variable->hasInit() &&
+                !invalidated_variables_.contains(variable) &&
+                visited_variables.insert(variable).second) {
+                collect_callable_targets(variable->getInit(), visited_variables, output);
+            }
+        }
+        if (const auto* member = llvm::dyn_cast<clang::MemberExpr>(expression)) {
+            if (const auto* target = llvm::dyn_cast<clang::FunctionDecl>(member->getMemberDecl())) {
+                append(target);
+                return;
+            }
+        }
+        if (const auto* record = expression->getType()->getAsCXXRecordDecl()) {
+            if (record->getQualifiedNameAsString() != "std::function") {
+                for (const auto* method : record->methods()) {
+                    if (method->getOverloadedOperator() == clang::OO_Call)
+                        append(method);
+                }
+            }
+        }
+        for (const auto* child : expression->children()) {
+            if (const auto* child_expression = llvm::dyn_cast_or_null<clang::Expr>(child))
+                collect_callable_targets(child_expression, visited_variables, output);
+        }
+    }
+
     template <typename Declaration, typename Traverse>
     bool traverse_callable(Declaration* declaration, Traverse traverse) {
         if (declaration == nullptr)
@@ -557,10 +700,7 @@ class UseVisitor : public clang::RecursiveASTVisitor<UseVisitor> {
         if (declaration->getTemplateSpecializationKind() == clang::TSK_ImplicitInstantiation)
             return true;
         const auto previous = caller_;
-        const auto* method = llvm::dyn_cast<clang::CXXMethodDecl>(declaration);
-        const bool nested_lambda =
-            method != nullptr && method->getParent()->isLambda() && previous.has_value();
-        caller_ = nested_lambda ? previous : id;
+        caller_ = id;
         if (auto* constructor = llvm::dyn_cast<clang::CXXConstructorDecl>(declaration)) {
             for (const auto* initializer : constructor->inits()) {
                 if (initializer != nullptr)
@@ -572,21 +712,25 @@ class UseVisitor : public clang::RecursiveASTVisitor<UseVisitor> {
         return result;
     }
     TranslationUnitCollector& collector_;
+    std::vector<bool>& registration_rule_matches_;
     std::optional<SymbolId> caller_;
     bool global_initializer_{false};
     std::unordered_set<const clang::FunctionDecl*> visited_functions_;
     std::unordered_set<const clang::Expr*> direct_callee_expressions_;
+    std::unordered_set<const clang::VarDecl*> invalidated_variables_;
 };
 
 class FactConsumer : public clang::ASTConsumer {
   public:
     FactConsumer(const CompileCommand& command, const IndexOptions& options, Graph& graph,
-                 std::vector<std::string>& diagnostics)
-        : command_(command), options_(options), graph_(graph), diagnostics_(diagnostics) {}
+                 std::vector<std::string>& diagnostics,
+                 std::vector<bool>& registration_rule_matches)
+        : command_(command), options_(options), graph_(graph), diagnostics_(diagnostics),
+          registration_rule_matches_(registration_rule_matches) {}
 
     void HandleTranslationUnit(clang::ASTContext& context) override {
         TranslationUnitCollector collector(command_, options_, context, graph_, diagnostics_);
-        UseVisitor uses(collector);
+        UseVisitor uses(collector, registration_rule_matches_);
         uses.TraverseDecl(context.getTranslationUnitDecl());
     }
 
@@ -595,17 +739,20 @@ class FactConsumer : public clang::ASTConsumer {
     const IndexOptions& options_;
     Graph& graph_;
     std::vector<std::string>& diagnostics_;
+    std::vector<bool>& registration_rule_matches_;
 };
 
 class FactAction : public clang::ASTFrontendAction {
   public:
     FactAction(const CompileCommand& command, const IndexOptions& options, Graph& graph,
-               std::vector<std::string>& diagnostics)
-        : command_(command), options_(options), graph_(graph), diagnostics_(diagnostics) {}
+               std::vector<std::string>& diagnostics, std::vector<bool>& registration_rule_matches)
+        : command_(command), options_(options), graph_(graph), diagnostics_(diagnostics),
+          registration_rule_matches_(registration_rule_matches) {}
 
     std::unique_ptr<clang::ASTConsumer> CreateASTConsumer(clang::CompilerInstance&,
                                                           llvm::StringRef) override {
-        return std::make_unique<FactConsumer>(command_, options_, graph_, diagnostics_);
+        return std::make_unique<FactConsumer>(command_, options_, graph_, diagnostics_,
+                                              registration_rule_matches_);
     }
 
   private:
@@ -613,16 +760,20 @@ class FactAction : public clang::ASTFrontendAction {
     const IndexOptions& options_;
     Graph& graph_;
     std::vector<std::string>& diagnostics_;
+    std::vector<bool>& registration_rule_matches_;
 };
 
 class FactActionFactory : public clang::tooling::FrontendActionFactory {
   public:
     FactActionFactory(const CompileCommand& command, const IndexOptions& options, Graph& graph,
-                      std::vector<std::string>& diagnostics)
-        : command_(command), options_(options), graph_(graph), diagnostics_(diagnostics) {}
+                      std::vector<std::string>& diagnostics,
+                      std::vector<bool>& registration_rule_matches)
+        : command_(command), options_(options), graph_(graph), diagnostics_(diagnostics),
+          registration_rule_matches_(registration_rule_matches) {}
 
     std::unique_ptr<clang::FrontendAction> create() override {
-        return std::make_unique<FactAction>(command_, options_, graph_, diagnostics_);
+        return std::make_unique<FactAction>(command_, options_, graph_, diagnostics_,
+                                            registration_rule_matches_);
     }
 
   private:
@@ -630,6 +781,7 @@ class FactActionFactory : public clang::tooling::FrontendActionFactory {
     const IndexOptions& options_;
     Graph& graph_;
     std::vector<std::string>& diagnostics_;
+    std::vector<bool>& registration_rule_matches_;
 };
 
 class SingleCommandDatabase : public clang::tooling::CompilationDatabase {
@@ -687,6 +839,7 @@ IndexResult LibToolingIndexer::index(const std::vector<CompileCommand>& commands
         throw std::runtime_error("compilation database contains no commands");
     IndexResult result;
     result.frontend = IndexFrontend::LibTooling;
+    std::vector<bool> registration_rule_matches(options_.callback_registration_rules.size(), false);
     if (options_.translation_unit_timeout.count() > 0 || options_.index_timeout.count() > 0 ||
         options_.max_ast_bytes != 0) {
         RunDiagnostics diagnostics{
@@ -750,7 +903,8 @@ IndexResult LibToolingIndexer::index(const std::vector<CompileCommand>& commands
                 adjusted.emplace_back("-Wno-unknown-warning-option");
                 return adjusted;
             });
-        FactActionFactory factory(command, options_, translation_unit_facts, result.diagnostics);
+        FactActionFactory factory(command, options_, translation_unit_facts, result.diagnostics,
+                                  registration_rule_matches);
         const int exit_code = tool.run(&factory);
         if (exit_code != 0) {
             const auto message = "Clang LibTooling indexing failed for " + command.file.string() +
@@ -822,6 +976,17 @@ IndexResult LibToolingIndexer::index(const std::vector<CompileCommand>& commands
             .exit_code = std::nullopt,
             .signal = std::nullopt,
         });
+    }
+    for (std::size_t index = 0; index < registration_rule_matches.size(); ++index) {
+        if (!registration_rule_matches[index]) {
+            const auto& rule = options_.callback_registration_rules[index];
+            throw IndexingError("callback registration rule did not match a registrar call: " +
+                                    rule.callee + ":" + std::to_string(rule.argument_index),
+                                {.state = RunState::Incomplete,
+                                 .frontend = result.frontend,
+                                 .partial_graph_discarded = true,
+                                 .translation_units = result.translation_unit_diagnostics});
+        }
     }
     add_manual_roots(result, options_);
     if (!options_.ast_filter.empty())

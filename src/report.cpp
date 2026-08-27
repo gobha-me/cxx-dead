@@ -7,6 +7,7 @@
 #include <map>
 #include <ostream>
 #include <set>
+#include <tuple>
 
 namespace cxx_dead {
 
@@ -218,11 +219,56 @@ AnalysisReport build_report(const Graph& graph, const ReachabilityResult& result
         ++report.defined_symbols;
         if (result.reachable[id]) {
             ++report.reachable_symbols;
+            if (result.provider_reachable[id])
+                ++report.provider_reachable_symbols;
+            else
+                ++report.structurally_reachable_symbols;
         } else {
             ++report.unreachable_symbols;
             report.findings.push_back(classify(graph, id, symbol));
         }
     }
+    for (const auto& edge : graph.edges()) {
+        if (edge.kind != EdgeKind::CallbackRegistration || !result.reachable[edge.from] ||
+            !result.provider_reachable[edge.to]) {
+            continue;
+        }
+        const auto& symbol = graph.symbols()[edge.to];
+        if (symbol.defined && is_reportable(symbol.scope)) {
+            report.provider_reachable.push_back({
+                .symbol = edge.to,
+                .from = edge.from,
+                .evidence = edge.evidence,
+            });
+        }
+    }
+    for (const auto& root : graph.roots()) {
+        if (root.kind != RootKind::CallbackRegistration ||
+            !result.provider_reachable[root.symbol]) {
+            continue;
+        }
+        const auto& symbol = graph.symbols()[root.symbol];
+        if (symbol.defined && is_reportable(symbol.scope)) {
+            report.provider_reachable.push_back({
+                .symbol = root.symbol,
+                .from = std::nullopt,
+                .evidence = root.evidence,
+            });
+        }
+    }
+    std::ranges::sort(report.provider_reachable, [&](const auto& left, const auto& right) {
+        const auto left_from = left.from.has_value() ? graph.symbols()[*left.from].key : "";
+        const auto right_from = right.from.has_value() ? graph.symbols()[*right.from].key : "";
+        return std::tuple{graph.symbols()[left.symbol].key, left_from, left.evidence.provider,
+                          left.evidence.reason} < std::tuple{graph.symbols()[right.symbol].key,
+                                                             right_from, right.evidence.provider,
+                                                             right.evidence.reason};
+    });
+    const auto provider_duplicate =
+        std::ranges::unique(report.provider_reachable, {}, [](const ProviderReachability& item) {
+            return std::tuple{item.symbol, item.from, item.evidence.provider, item.evidence.reason};
+        });
+    report.provider_reachable.erase(provider_duplicate.begin(), provider_duplicate.end());
     std::ranges::sort(report.findings, [&](const Finding& left, const Finding& right) {
         const auto& lhs = graph.symbols()[left.symbol];
         const auto& rhs = graph.symbols()[right.symbol];
@@ -293,7 +339,9 @@ void write_human_report(std::ostream& output, const Graph& graph,
            << report.indexed_symbols << " indexed, " << report.external_opaque_symbols
            << " external opaque\n"
            << "  Defined project functions: " << report.defined_symbols << '\n'
-           << "  Reachable:                 " << report.reachable_symbols << '\n'
+           << "  Reachable:                 " << report.reachable_symbols << " ("
+           << report.structurally_reachable_symbols << " structural, "
+           << report.provider_reachable_symbols << " provider)\n"
            << "  Unreachable candidates:    " << report.unreachable_symbols << "\n\n";
 
     output << "ROOTS\n";
@@ -305,6 +353,21 @@ void write_human_report(std::ostream& output, const Graph& graph,
                << '\n';
     }
     output << '\n';
+
+    if (!report.provider_reachable.empty()) {
+        output << "PROVIDER-REACHABLE CALLBACKS\n";
+        for (const auto& retained : report.provider_reachable) {
+            const auto& symbol = graph.symbols()[retained.symbol];
+            output << "  " << display_symbol(symbol) << "\n";
+            if (retained.from.has_value()) {
+                output << "    From:     " << display_symbol(graph.symbols()[*retained.from])
+                       << "\n";
+            }
+            output << "    Evidence: " << retained.evidence.provider << ": "
+                   << retained.evidence.reason << '\n';
+        }
+        output << '\n';
+    }
 
     if (report.findings.empty()) {
         output << "No unreachable function definitions found.\n";
@@ -411,6 +474,9 @@ void write_json_report(std::ostream& output, const Graph& graph,
            << "  \"summary\": {\n"
            << "    \"defined_symbols\": " << report.defined_symbols << ",\n"
            << "    \"reachable_symbols\": " << report.reachable_symbols << ",\n"
+           << "    \"structurally_reachable_symbols\": " << report.structurally_reachable_symbols
+           << ",\n"
+           << "    \"provider_reachable_symbols\": " << report.provider_reachable_symbols << ",\n"
            << "    \"unreachable_symbols\": " << report.unreachable_symbols << ",\n"
            << "    \"scope_counts\": {\n"
            << "      \"reportable\": " << report.reportable_symbols << ",\n"
@@ -438,6 +504,30 @@ void write_json_report(std::ostream& output, const Graph& graph,
                << "    }";
     }
     if (!graph.roots().empty())
+        output << '\n';
+    output << "  ],\n"
+           << "  \"provider_reachable\": [";
+    for (std::size_t index = 0; index < report.provider_reachable.size(); ++index) {
+        const auto& retained = report.provider_reachable[index];
+        const auto& symbol = graph.symbols()[retained.symbol];
+        output << (index == 0 ? "\n" : ",\n") << "    {\n"
+               << "      \"symbol\": \"" << json::escape(symbol.qualified_name) << "\",\n"
+               << "      \"signature\": \"" << json::escape(symbol.signature) << "\",\n"
+               << "      \"key\": \"" << json::escape(symbol.key) << "\",\n"
+               << "      \"from_symbol\": ";
+        if (retained.from.has_value()) {
+            const auto& from = graph.symbols()[*retained.from];
+            output << '"' << json::escape(from.qualified_name) << "\",\n"
+                   << "      \"from_signature\": \"" << json::escape(from.signature) << "\",\n";
+        } else {
+            output << "null,\n      \"from_signature\": null,\n";
+        }
+        output << "      \"evidence\": {\"provider\": \""
+               << json::escape(retained.evidence.provider) << "\", \"reason\": \""
+               << json::escape(retained.evidence.reason) << "\"}\n"
+               << "    }";
+    }
+    if (!report.provider_reachable.empty())
         output << '\n';
     output << "  ],\n"
            << "  \"findings\": [";

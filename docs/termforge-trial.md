@@ -153,3 +153,17 @@ owning-pointer helpers (`make_driver`, `make_fake_reader`, `make_proc_reader`, a
 `select_driver_for`) emitted conservative diagnostics instead of high-confidence constructor
 findings. The run remained complete under a 60-second per-TU timeout, 600-second index timeout, and
 512 MiB per-TU AST-output limit.
+
+## v0.10.0 callable regression rerun
+
+The callable-aware AST JSON frontend reran the same 48-command `forge-top` configuration on
+TermForge revision `82b1466` with Clang 20.1.8. The bounded run completed in 69.1 seconds at
+279,072 KiB peak RSS, producing 530,628,637 AST bytes, 7,703,237 fact bytes, 1,698 defined symbols,
+1,758 graph symbols, 3,281 edges, and 647 advisory findings.
+
+Of 141 unreachable `operator()` findings, 139 now retain typed callable-object escape evidence and
+are classified `dynamically_referenced` rather than high-confidence dead. The two remaining
+`likely_dead` call operators are `KittyDriver::ResidentPlacementKeyHash` and
+`forge_top::ProcessIdentityHash`; they remain review candidates rather than deletion evidence.
+Neither `FakeReader` nor `ProcReader` construction regressed. The run used the same 60-second per-TU,
+600-second index, and 512 MiB per-TU AST-output bounds as the v0.9.0 rerun.

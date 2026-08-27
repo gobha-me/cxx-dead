@@ -14,6 +14,8 @@ bounds to the subprocess frontend. Partial facts remain inaccessible to reportin
 v0.9.0 adds a reduced 13-definition construction fixture covering selected overloads, aliases,
 base/member lifetimes, standard smart-pointer factories, a conservative custom-factory fallback,
 and negative controls for nested or borrowed owning pointers.
+v0.10.0 adds a callable fixture covering structural invocation, ambiguous callable escape,
+`std::function`, member callbacks, and configured registration provenance.
 
 Goal: make precision measurable before expanding language coverage.
 
@@ -57,7 +59,8 @@ Remaining hardening tasks:
    factories, member/base initialization, and cleanup paths. (completed in v0.9.0; broader helper
    semantics remain open)
 2. Limit global-initializer roots to project-owned, linked definitions.
-3. Extend the structured evidence model with provider-composed dynamic edges and suppressions.
+3. Extend the v0.10.0 callback-registration foundation with general provider-composed roots,
+   dynamic edges, YAML policy, and suppressions.
 4. Add weak-component/type/directory aggregation above SCCs.
 5. Replace provisional confidence numbers with configurable evidence policy.
 6. Add resource limits, cancellation, and structured incomplete-run diagnostics. (completed in

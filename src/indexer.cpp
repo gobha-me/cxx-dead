@@ -34,9 +34,11 @@ struct TranslationUnitState {
     std::unordered_map<std::string, std::string> contexts;
     std::unordered_map<std::string, SymbolId> declarations;
     std::unordered_map<std::string, Symbol> opaque_declarations;
+    std::unordered_map<std::string, std::vector<SymbolId>> callable_bindings;
     std::unordered_map<std::string, RecordInfo>& records;
     std::unordered_map<std::string, std::vector<std::size_t>> line_offsets;
     std::vector<std::string>& diagnostics;
+    std::vector<bool>& registration_rule_matches;
 };
 
 bool is_function_kind(std::string_view kind) {
@@ -539,6 +541,88 @@ std::vector<SymbolId> resolve_references(const Value& expression, TranslationUni
     return result;
 }
 
+void append_unique(std::vector<SymbolId>& destination, const std::vector<SymbolId>& source) {
+    for (const auto id : source) {
+        if (std::ranges::find(destination, id) == destination.end())
+            destination.push_back(id);
+    }
+}
+
+bool is_call_expression(std::string_view kind);
+
+void collect_lambda_operators(const Value& node, TranslationUnitState& state,
+                              std::vector<SymbolId>& output) {
+    if (node.string_or("kind") == "CXXMethodDecl" && node.string_or("name") == "operator()") {
+        if (const auto found = state.declarations.find(node.string_or("id"));
+            found != state.declarations.end() &&
+            std::ranges::find(output, found->second) == output.end()) {
+            output.push_back(found->second);
+        }
+        return;
+    }
+    for (const auto& child : children(node))
+        collect_lambda_operators(child, state, output);
+}
+
+std::vector<SymbolId> resolve_callable_targets(const Value& expression,
+                                               TranslationUnitState& state) {
+    const auto kind = expression.string_or("kind");
+    std::vector<SymbolId> result;
+    if (kind == "LambdaExpr") {
+        collect_lambda_operators(expression, state, result);
+        return result;
+    }
+    if (kind == "DeclRefExpr") {
+        if (const auto* referenced = expression.find("referencedDecl");
+            referenced != nullptr && referenced->is_object() &&
+            referenced->string_or("kind") == "VarDecl") {
+            if (const auto binding = state.callable_bindings.find(referenced->string_or("id"));
+                binding != state.callable_bindings.end()) {
+                append_unique(result, binding->second);
+            }
+        }
+    }
+    if (kind == "DeclRefExpr" || kind == "MemberExpr")
+        append_unique(result, resolve_references(expression, state));
+
+    const auto callable_type = normalize_type(desugared_type_string(expression));
+    if (!callable_type.empty()) {
+        for (SymbolId id = 0; id < state.graph.symbols().size(); ++id) {
+            const auto& symbol = state.graph.symbols()[id];
+            if (symbol.name == "operator()" && names_equivalent(symbol.class_name, callable_type) &&
+                std::ranges::find(result, id) == result.end()) {
+                result.push_back(id);
+            }
+        }
+    }
+
+    if (!is_call_expression(kind) && !is_function_kind(kind)) {
+        for (const auto& child : children(expression))
+            append_unique(result, resolve_callable_targets(child, state));
+    }
+    return result;
+}
+
+bool rule_matches(const Symbol& symbol, const CallbackRegistrationRule& rule) {
+    return symbol.qualified_name == rule.callee || symbol.identity.linkage_name == rule.callee ||
+           symbol.key == rule.callee;
+}
+
+std::string referenced_variable_id(const Value& expression) {
+    if (expression.string_or("kind") == "DeclRefExpr") {
+        if (const auto* referenced = expression.find("referencedDecl");
+            referenced != nullptr && referenced->is_object() &&
+            referenced->string_or("kind") == "VarDecl") {
+            return referenced->string_or("id");
+        }
+    }
+    for (const auto& child : children(expression)) {
+        if (auto id = referenced_variable_id(child); !id.empty())
+            return id;
+    }
+    return {};
+}
+
 bool is_call_expression(std::string_view kind) {
     return kind == "CallExpr" || kind == "CXXMemberCallExpr" || kind == "CXXOperatorCallExpr" ||
            kind == "CUDAKernelCallExpr";
@@ -557,6 +641,9 @@ void add_use(TranslationUnitState& state, std::optional<SymbolId> caller, Symbol
                 break;
             case EdgeKind::VirtualDispatch:
                 reason = "virtual dispatch";
+                break;
+            case EdgeKind::CallbackRegistration:
+                reason = "configured callback registration";
                 break;
             }
         }
@@ -651,14 +738,76 @@ void collect_uses(const Value& node, TranslationUnitState& state, std::optional<
     if (kind == "VarDecl" && top_level && !caller.has_value())
         global_initializer = true;
 
+    if (kind == "VarDecl") {
+        std::vector<SymbolId> targets;
+        for (const auto& child : children(node))
+            append_unique(targets, resolve_callable_targets(child, state));
+        if (!targets.empty())
+            state.callable_bindings.insert_or_assign(node.string_or("id"), std::move(targets));
+    }
+
+    if ((kind == "BinaryOperator" && node.string_or("opcode") == "=") ||
+        kind == "CompoundAssignOperator") {
+        if (!children(node).empty())
+            state.callable_bindings.erase(referenced_variable_id(children(node).front()));
+    }
+
     if (is_call_expression(kind)) {
         const auto& inner = children(node);
         if (!inner.empty()) {
-            const auto targets = resolve_references(inner.front(), state);
+            auto targets = resolve_references(inner.front(), state);
+            if (targets.empty())
+                targets = resolve_callable_targets(inner.front(), state);
             for (const auto target : targets) {
                 add_use(state, caller, target, EdgeKind::DirectCall, global_initializer);
             }
             add_factory_construction_edges(state, caller, node, inner.front(), global_initializer);
+            for (std::size_t argument = 1; argument < inner.size(); ++argument) {
+                const auto callable_targets = resolve_callable_targets(inner[argument], state);
+                for (const auto target : callable_targets) {
+                    state.graph.add_escape(
+                        target, EscapeKind::CallableObject,
+                        {.provider = "clang_ast",
+                         .reason = "callable value passed outside a direct callee position"},
+                        caller);
+                }
+            }
+            for (std::size_t rule_index = 0;
+                 rule_index < state.options.callback_registration_rules.size(); ++rule_index) {
+                const auto& rule = state.options.callback_registration_rules[rule_index];
+                const bool matched_callee = std::ranges::any_of(targets, [&](SymbolId target) {
+                    return rule_matches(state.graph.symbols()[target], rule);
+                });
+                if (!matched_callee)
+                    continue;
+                state.registration_rule_matches[rule_index] = true;
+                if (rule.argument_index + 1U >= inner.size()) {
+                    throw std::runtime_error("callback registration rule " + rule.callee + ":" +
+                                             std::to_string(rule.argument_index) +
+                                             " exceeds the registrar argument list");
+                }
+                const auto callbacks =
+                    resolve_callable_targets(inner[rule.argument_index + 1U], state);
+                if (callbacks.empty()) {
+                    throw std::runtime_error("callback registration rule " + rule.callee + ":" +
+                                             std::to_string(rule.argument_index) +
+                                             " did not resolve a callable argument");
+                }
+                const auto reason = "configured callback argument " +
+                                    std::to_string(rule.argument_index) + " of " + rule.callee;
+                for (const auto callback : callbacks) {
+                    if (caller.has_value()) {
+                        state.graph.add_edge(
+                            *caller, callback, EdgeKind::CallbackRegistration,
+                            {.provider = "callback_registration", .reason = reason});
+                    } else if (global_initializer) {
+                        state.graph.add_root(
+                            callback, RootKind::CallbackRegistration,
+                            {.provider = "callback_registration",
+                             .reason = reason + " from a namespace-scope initializer"});
+                    }
+                }
+            }
             collect_uses(inner.front(), state, caller, global_initializer, true, false);
             for (std::size_t index = 1; index < inner.size(); ++index) {
                 collect_uses(inner[index], state, caller, global_initializer, false, false);
@@ -674,6 +823,17 @@ void collect_uses(const Value& node, TranslationUnitState& state, std::optional<
                                   : std::optional<std::string_view>{constructor_type};
         add_construction_edges(state, caller, desugared_type_string(node), selected,
                                global_initializer, "constructor or destructor use");
+        if (normalize_type(desugared_type_string(node)).find("std::function<") !=
+            std::string::npos) {
+            for (const auto& child : children(node)) {
+                for (const auto target : resolve_callable_targets(child, state)) {
+                    state.graph.add_escape(target, EscapeKind::CallableObject,
+                                           {.provider = "clang_ast",
+                                            .reason = "callable value stored in std::function"},
+                                           caller);
+                }
+            }
+        }
     }
 
     if (!callee_position && (kind == "DeclRefExpr" || kind == "MemberExpr")) {
@@ -927,6 +1087,7 @@ IndexResult ClangAstIndexer::index(const std::vector<CompileCommand>& commands) 
     IndexResult result;
     result.frontend = IndexFrontend::AstJson;
     std::unordered_map<std::string, RecordInfo> records;
+    std::vector<bool> registration_rule_matches(options_.callback_registration_rules.size(), false);
     const auto index_started = std::chrono::steady_clock::now();
 
     for (std::size_t command_index = 0; command_index < commands.size(); ++command_index) {
@@ -1008,8 +1169,19 @@ IndexResult ClangAstIndexer::index(const std::vector<CompileCommand>& commands) 
                 "invalid Clang AST JSON for " + command.file.string() + ": " + error.what());
         }
         Graph translation_unit_facts;
-        TranslationUnitState state{command, options_, translation_unit_facts, {}, {}, {},
-                                   records, {},       result.diagnostics};
+        TranslationUnitState state{
+            .command = command,
+            .options = options_,
+            .graph = translation_unit_facts,
+            .contexts = {},
+            .declarations = {},
+            .opaque_declarations = {},
+            .callable_bindings = {},
+            .records = records,
+            .line_offsets = {},
+            .diagnostics = result.diagnostics,
+            .registration_rule_matches = registration_rule_matches,
+        };
         try {
             for (const auto& ast : ast_documents)
                 collect_contexts(ast, state, "", command.file);
@@ -1062,6 +1234,18 @@ IndexResult ClangAstIndexer::index(const std::vector<CompileCommand>& commands) 
     }
 
     add_virtual_dispatch_edges(result.graph, records);
+
+    for (std::size_t index = 0; index < registration_rule_matches.size(); ++index) {
+        if (!registration_rule_matches[index]) {
+            const auto& rule = options_.callback_registration_rules[index];
+            throw IndexingError("callback registration rule did not match a registrar call: " +
+                                    rule.callee + ":" + std::to_string(rule.argument_index),
+                                {.state = RunState::Incomplete,
+                                 .frontend = result.frontend,
+                                 .partial_graph_discarded = true,
+                                 .translation_units = result.translation_unit_diagnostics});
+        }
+    }
 
     for (const auto& requested : options_.manual_roots) {
         bool matched = false;

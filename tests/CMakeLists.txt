@@ -7,6 +7,7 @@ target_compile_features(cxx_dead_tests PRIVATE cxx_std_23)
 target_compile_definitions(cxx_dead_tests PRIVATE
     CXX_DEAD_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/application"
     CXX_DEAD_CONSTRUCTION_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/construction"
+    CXX_DEAD_CALLABLE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/callables"
     CXX_DEAD_PROCESS_FIXTURE="$<TARGET_FILE:cxx_dead_process_fixture>"
 )
 
@@ -88,6 +89,7 @@ if(CXX_DEAD_ENABLE_LIBTOOLING)
     target_compile_definitions(cxx_dead_frontend_tests PRIVATE
         CXX_DEAD_GOLDEN_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/golden"
         CXX_DEAD_CONSTRUCTION_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/construction"
+        CXX_DEAD_CALLABLE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/callables"
         CXX_DEAD_SCOPE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/scope"
     )
     add_test(NAME cxx_dead_frontend_tests COMMAND cxx_dead_frontend_tests)
@@ -102,6 +104,29 @@ add_test(
 )
 set_tests_properties(cxx_dead_scope_cli PROPERTIES
     PASS_REGULAR_EXPRESSION "\"indexed\": [1-9]"
+)
+
+add_test(
+    NAME cxx_dead_callable_cli
+    COMMAND $<TARGET_FILE:cxx-dead>
+        "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/callables/compile_commands.json"
+        --project-root "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/callables"
+        --ast-filter callable_fixture
+        --root callable_fixture::run
+        --callback-registration callable_fixture::registrar:0
+        --callback-registration callable_fixture::member_registrar:0
+        --format json
+)
+set_tests_properties(cxx_dead_callable_cli PROPERTIES
+    PASS_REGULAR_EXPRESSION "\"provider_reachable_symbols\": 2"
+)
+
+add_test(
+    NAME cxx_dead_invalid_callback_cli
+    COMMAND $<TARGET_FILE:cxx-dead> --callback-registration invalid
+)
+set_tests_properties(cxx_dead_invalid_callback_cli PROPERTIES
+    WILL_FAIL TRUE
 )
 
 add_test(

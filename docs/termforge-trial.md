@@ -76,9 +76,11 @@ concrete mangled specializations.
 ### Template-mediated construction
 
 Constructors invoked inside `std::make_unique`, including TermForge's `FakeReader` and `ProcReader`,
-remain false positives. The project call graph reaches `make_unique`, but the actual constructor call
-is in a system template body outside the project graph. This needs either explicit standard-library
-semantic modeling or instantiation-level call facts from a LibTooling frontend.
+were false positives because the project call graph reached `make_unique` while the actual
+constructor call lived in a system template body outside the project graph. Version 0.9.0 resolves
+the named regressions by treating top-level prvalue `unique_ptr<T>`/`shared_ptr<T>` factory results
+as conservative construction and destruction evidence. Exact standard factories are recognized;
+other owning-pointer factories retain the element lifetime with an explicit diagnostic.
 
 ### Callable objects and callbacks
 
@@ -112,8 +114,8 @@ remaining extraction gaps prevent treating internal findings as deletion evidenc
 
 ## Recommended next work from the trial
 
-1. Model `make_unique`/`make_shared` construction and callable escape/invocation.
-2. Rerun TermForge with signature-aware, precise source findings and review the remaining callable
+1. Model callable escape/invocation.
+2. Rerun TermForge after callable modeling and review the remaining callable
    cases.
 3. Separate graph scope from report scope so a library can participate in reachability while only an
    executable directory is reported.
@@ -137,3 +139,17 @@ filtered workload's peak RSS was effectively unchanged. LibTooling's finding set
 AST JSON candidates plus 12 additional functions, primarily template-adjacent helpers and lambdas.
 Golden and scope fixtures remain exact parity gates, but neither TermForge set is deletion evidence
 and the larger LibTooling count is not treated as a precision claim.
+
+## v0.9.0 construction regression rerun
+
+The bounded AST JSON frontend reran the same 48-command `forge-top` configuration on TermForge
+revision `82b1466` with Clang 20.1.8. The run completed in 71.5 seconds at 279,496 KiB peak RSS,
+producing 530,628,637 AST bytes, 7,677,911 fact bytes, 1,698 defined symbols, 1,758 graph symbols,
+3,278 edges, and 648 advisory findings. The count is not directly comparable with the v0.5.0 trial
+because TermForge changed substantially between revisions.
+
+Neither `FakeReader` nor `ProcReader` constructors remained in the findings. Four project-specific
+owning-pointer helpers (`make_driver`, `make_fake_reader`, `make_proc_reader`, and
+`select_driver_for`) emitted conservative diagnostics instead of high-confidence constructor
+findings. The run remained complete under a 60-second per-TU timeout, 600-second index timeout, and
+512 MiB per-TU AST-output limit.

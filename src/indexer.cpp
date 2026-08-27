@@ -36,6 +36,7 @@ struct TranslationUnitState {
     std::unordered_map<std::string, Symbol> opaque_declarations;
     std::unordered_map<std::string, RecordInfo>& records;
     std::unordered_map<std::string, std::vector<std::size_t>> line_offsets;
+    std::vector<std::string>& diagnostics;
 };
 
 bool is_function_kind(std::string_view kind) {
@@ -340,6 +341,40 @@ std::string normalize_type(std::string value) {
     return value;
 }
 
+std::optional<std::string> owning_pointer_element_type(std::string_view type) {
+    const auto normalized = normalize_type(std::string(type));
+    for (const auto pointer_name :
+         {std::string_view{"unique_ptr<"}, std::string_view{"shared_ptr<"}}) {
+        const auto name = normalized.find(pointer_name);
+        if (name == std::string_view::npos)
+            continue;
+        const auto prefix = std::string_view(normalized).substr(0, name);
+        if (!prefix.starts_with("std::") || prefix.find_first_of("<>, ") != std::string_view::npos)
+            continue;
+        const auto begin = name + pointer_name.size();
+        std::size_t depth = 0;
+        for (std::size_t index = begin; index < normalized.size(); ++index) {
+            if (normalized[index] == '<') {
+                ++depth;
+            } else if (normalized[index] == '>') {
+                if (depth == 0) {
+                    auto element = normalize_type(normalized.substr(begin, index - begin));
+                    if (!element.empty() && !element.ends_with("[]"))
+                        return element;
+                    return std::nullopt;
+                }
+                --depth;
+            } else if (normalized[index] == ',' && depth == 0) {
+                auto element = normalize_type(normalized.substr(begin, index - begin));
+                if (!element.empty() && !element.ends_with("[]"))
+                    return element;
+                return std::nullopt;
+            }
+        }
+    }
+    return std::nullopt;
+}
+
 bool names_equivalent(std::string_view qualified, std::string_view possibly_relative) {
     if (qualified == possibly_relative)
         return true;
@@ -510,19 +545,20 @@ bool is_call_expression(std::string_view kind) {
 }
 
 void add_use(TranslationUnitState& state, std::optional<SymbolId> caller, SymbolId target,
-             EdgeKind kind, bool global_initializer) {
+             EdgeKind kind, bool global_initializer, std::string reason = {}) {
     if (caller.has_value()) {
-        std::string reason;
-        switch (kind) {
-        case EdgeKind::DirectCall:
-            reason = "direct call expression";
-            break;
-        case EdgeKind::Constructs:
-            reason = "constructor or destructor use";
-            break;
-        case EdgeKind::VirtualDispatch:
-            reason = "virtual dispatch";
-            break;
+        if (reason.empty()) {
+            switch (kind) {
+            case EdgeKind::DirectCall:
+                reason = "direct call expression";
+                break;
+            case EdgeKind::Constructs:
+                reason = "constructor or destructor use";
+                break;
+            case EdgeKind::VirtualDispatch:
+                reason = "virtual dispatch";
+                break;
+            }
         }
         state.graph.add_edge(*caller, target, kind,
                              {.provider = "clang_ast", .reason = std::move(reason)});
@@ -533,31 +569,65 @@ void add_use(TranslationUnitState& state, std::optional<SymbolId> caller, Symbol
     }
 }
 
-void add_construction_edges(TranslationUnitState& state, std::optional<SymbolId> caller,
-                            const Value& node, bool global_initializer) {
-    const auto constructed_type = normalize_type(desugared_type_string(node));
+bool add_construction_edges(TranslationUnitState& state, std::optional<SymbolId> caller,
+                            std::string constructed_type,
+                            std::optional<std::string_view> constructor_signature,
+                            bool global_initializer, std::string_view reason) {
+    constructed_type = normalize_type(std::move(constructed_type));
     if (constructed_type.empty())
-        return;
-    std::vector<std::string> constructed_classes{constructed_type};
-    std::unordered_set<std::string> visited;
-    for (std::size_t index = 0; index < constructed_classes.size(); ++index) {
-        const auto current = constructed_classes[index];
-        for (const auto& [record_name, record] : state.records) {
-            if (!names_equivalent(record_name, current) || !visited.insert(record_name).second)
-                continue;
-            constructed_classes.push_back(record_name);
-            constructed_classes.insert(constructed_classes.end(), record.bases.begin(),
-                                       record.bases.end());
-        }
-    }
+        return false;
+    bool matched = false;
     for (SymbolId id = 0; id < state.graph.symbols().size(); ++id) {
         const auto& symbol = state.graph.symbols()[id];
-        if ((symbol.kind == SymbolKind::Constructor || symbol.kind == SymbolKind::Destructor) &&
-            std::ranges::any_of(constructed_classes, [&](const std::string& class_name) {
-                return names_equivalent(symbol.class_name, normalize_type(class_name));
-            })) {
-            add_use(state, caller, id, EdgeKind::Constructs, global_initializer);
-        }
+        if (!names_equivalent(symbol.class_name, constructed_type))
+            continue;
+        const bool selected_constructor =
+            symbol.kind == SymbolKind::Constructor &&
+            (!constructor_signature.has_value() || symbol.signature == *constructor_signature);
+        if (!selected_constructor && symbol.kind != SymbolKind::Destructor)
+            continue;
+        add_use(state, caller, id, EdgeKind::Constructs, global_initializer, std::string(reason));
+        matched = true;
+    }
+    return matched;
+}
+
+std::string referenced_function_name(const Value& node) {
+    if (const auto* referenced = node.find("referencedDecl");
+        referenced != nullptr && referenced->is_object() &&
+        is_function_kind(referenced->string_or("kind"))) {
+        return referenced->string_or("name");
+    }
+    for (const auto& child : children(node)) {
+        if (auto name = referenced_function_name(child); !name.empty())
+            return name;
+    }
+    return {};
+}
+
+void add_factory_construction_edges(TranslationUnitState& state, std::optional<SymbolId> caller,
+                                    const Value& call, const Value& callee,
+                                    bool global_initializer) {
+    if (call.string_or("valueCategory") != "prvalue")
+        return;
+    const auto result_type = desugared_type_string(call);
+    const auto element_type = owning_pointer_element_type(result_type);
+    if (!element_type.has_value())
+        return;
+    const auto helper = referenced_function_name(callee);
+    if (helper.empty())
+        return;
+    const bool standard_factory = helper == "make_unique" || helper == "make_shared";
+    const auto reason = standard_factory ? "standard smart-pointer factory construction"
+                                         : "conservative owning-pointer factory construction";
+    if (!add_construction_edges(state, caller, *element_type, std::nullopt, global_initializer,
+                                reason)) {
+        return;
+    }
+    if (!standard_factory) {
+        state.diagnostics.push_back("unsupported owning-pointer factory " + helper +
+                                    "; conservatively retained construction and destruction for " +
+                                    *element_type);
     }
 }
 
@@ -588,6 +658,7 @@ void collect_uses(const Value& node, TranslationUnitState& state, std::optional<
             for (const auto target : targets) {
                 add_use(state, caller, target, EdgeKind::DirectCall, global_initializer);
             }
+            add_factory_construction_edges(state, caller, node, inner.front(), global_initializer);
             collect_uses(inner.front(), state, caller, global_initializer, true, false);
             for (std::size_t index = 1; index < inner.size(); ++index) {
                 collect_uses(inner[index], state, caller, global_initializer, false, false);
@@ -597,7 +668,12 @@ void collect_uses(const Value& node, TranslationUnitState& state, std::optional<
     }
 
     if (kind == "CXXConstructExpr" || kind == "CXXTemporaryObjectExpr") {
-        add_construction_edges(state, caller, node, global_initializer);
+        const auto constructor_type = type_string(node, "ctorType");
+        const auto selected = constructor_type.empty()
+                                  ? std::optional<std::string_view>{}
+                                  : std::optional<std::string_view>{constructor_type};
+        add_construction_edges(state, caller, desugared_type_string(node), selected,
+                               global_initializer, "constructor or destructor use");
     }
 
     if (!callee_position && (kind == "DeclRefExpr" || kind == "MemberExpr")) {
@@ -933,7 +1009,7 @@ IndexResult ClangAstIndexer::index(const std::vector<CompileCommand>& commands) 
         }
         Graph translation_unit_facts;
         TranslationUnitState state{command, options_, translation_unit_facts, {}, {}, {},
-                                   records, {}};
+                                   records, {},       result.diagnostics};
         try {
             for (const auto& ast : ast_documents)
                 collect_contexts(ast, state, "", command.file);

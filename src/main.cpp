@@ -100,7 +100,7 @@ CliOptions parse_cli(int count, char** arguments) {
             std::exit(0);
         }
         if (argument == "--version") {
-            std::cout << "cxx-dead 0.8.0\n";
+            std::cout << "cxx-dead 0.9.0\n";
             std::exit(0);
         }
         if (argument == "--compile-commands") {

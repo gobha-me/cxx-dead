@@ -4,6 +4,7 @@
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/Decl.h>
 #include <clang/AST/DeclCXX.h>
+#include <clang/AST/DeclTemplate.h>
 #include <clang/AST/ExprCXX.h>
 #include <clang/AST/Mangle.h>
 #include <clang/AST/RecursiveASTVisitor.h>
@@ -98,10 +99,11 @@ SymbolKind symbol_kind(const clang::FunctionDecl& declaration) {
 class TranslationUnitCollector {
   public:
     TranslationUnitCollector(const CompileCommand& command, const IndexOptions& options,
-                             clang::ASTContext& context, Graph& graph)
+                             clang::ASTContext& context, Graph& graph,
+                             std::vector<std::string>& diagnostics)
         : command_(command), options_(options), context_(context),
           source_manager_(context.getSourceManager()), graph_(graph),
-          mangle_context_(context.createMangleContext()) {}
+          mangle_context_(context.createMangleContext()), diagnostics_(diagnostics) {}
 
     std::optional<SymbolId> add_declaration(const clang::FunctionDecl* declaration,
                                             bool referenced = false) {
@@ -199,22 +201,23 @@ class TranslationUnitCollector {
     }
 
     void add_use(std::optional<SymbolId> caller, const clang::FunctionDecl* target, EdgeKind kind,
-                 bool global_initializer) {
+                 bool global_initializer, std::string reason = {}) {
         const auto target_id = add_declaration(target, true);
         if (!target_id.has_value())
             return;
         if (caller.has_value()) {
-            std::string reason;
-            switch (kind) {
-            case EdgeKind::DirectCall:
-                reason = "direct call expression";
-                break;
-            case EdgeKind::Constructs:
-                reason = "constructor or destructor use";
-                break;
-            case EdgeKind::VirtualDispatch:
-                reason = "virtual dispatch";
-                break;
+            if (reason.empty()) {
+                switch (kind) {
+                case EdgeKind::DirectCall:
+                    reason = "direct call expression";
+                    break;
+                case EdgeKind::Constructs:
+                    reason = "constructor or destructor use";
+                    break;
+                case EdgeKind::VirtualDispatch:
+                    reason = "virtual dispatch";
+                    break;
+                }
             }
             graph_.add_edge(*caller, *target_id, kind,
                             {.provider = "clang_ast", .reason = std::move(reason)});
@@ -239,20 +242,53 @@ class TranslationUnitCollector {
                           const clang::CXXConstructorDecl* constructor, bool global_initializer) {
         if (constructor == nullptr)
             return;
-        std::vector<const clang::CXXRecordDecl*> pending{constructor->getParent()};
-        std::unordered_set<const clang::CXXRecordDecl*> visited;
-        while (!pending.empty()) {
-            const auto* record = pending.back();
-            pending.pop_back();
-            if (record == nullptr || !visited.insert(record->getCanonicalDecl()).second)
-                continue;
-            for (const auto* candidate : record->ctors())
-                add_use(caller, candidate, EdgeKind::Constructs, global_initializer);
-            add_use(caller, record->getDestructor(), EdgeKind::Constructs, global_initializer);
-            for (const auto& base : record->bases()) {
-                if (const auto* base_record = base.getType()->getAsCXXRecordDecl())
-                    pending.push_back(base_record);
-            }
+        add_use(caller, constructor, EdgeKind::Constructs, global_initializer);
+        add_use(caller, constructor->getParent()->getDestructor(), EdgeKind::Constructs,
+                global_initializer);
+    }
+
+    void add_factory_construction(std::optional<SymbolId> caller, const clang::CallExpr& call,
+                                  const clang::FunctionDecl* target, bool global_initializer) {
+        if (!call.isPRValue())
+            return;
+        const auto canonical = call.getType().getCanonicalType();
+        const auto* record = canonical->getAsCXXRecordDecl();
+        const auto* specialization =
+            llvm::dyn_cast_or_null<clang::ClassTemplateSpecializationDecl>(record);
+        if (specialization == nullptr)
+            return;
+        const auto pointer_name = specialization->getSpecializedTemplate()->getNameAsString();
+        if (pointer_name != "unique_ptr" && pointer_name != "shared_ptr")
+            return;
+        const auto& arguments = specialization->getTemplateArgs();
+        if (arguments.size() == 0 || arguments[0].getKind() != clang::TemplateArgument::Type)
+            return;
+        const auto element_type = arguments[0].getAsType().getCanonicalType();
+        if (element_type->isArrayType())
+            return;
+        const auto* element = element_type->getAsCXXRecordDecl();
+        if (element == nullptr)
+            return;
+
+        const auto helper = target == nullptr ? std::string{} : target->getNameAsString();
+        if (helper.empty())
+            return;
+        const bool standard_factory = helper == "make_unique" || helper == "make_shared";
+        const auto reason = standard_factory ? "standard smart-pointer factory construction"
+                                             : "conservative owning-pointer factory construction";
+        bool matched = false;
+        for (const auto* constructor : element->ctors()) {
+            const auto before = graph_.edges().size() + graph_.roots().size();
+            add_use(caller, constructor, EdgeKind::Constructs, global_initializer, reason);
+            matched = matched || graph_.edges().size() + graph_.roots().size() != before;
+        }
+        const auto before = graph_.edges().size() + graph_.roots().size();
+        add_use(caller, element->getDestructor(), EdgeKind::Constructs, global_initializer, reason);
+        matched = matched || graph_.edges().size() + graph_.roots().size() != before;
+        if (matched && !standard_factory) {
+            diagnostics_.push_back("unsupported owning-pointer factory " + helper +
+                                   "; conservatively retained construction and destruction for " +
+                                   element->getQualifiedNameAsString());
         }
     }
 
@@ -407,6 +443,7 @@ class TranslationUnitCollector {
     clang::SourceManager& source_manager_;
     Graph& graph_;
     std::unique_ptr<clang::MangleContext> mangle_context_;
+    std::vector<std::string>& diagnostics_;
 };
 
 class UseVisitor : public clang::RecursiveASTVisitor<UseVisitor> {
@@ -471,8 +508,10 @@ class UseVisitor : public clang::RecursiveASTVisitor<UseVisitor> {
     bool VisitCallExpr(clang::CallExpr* expression) {
         if (expression == nullptr)
             return true;
-        if (const auto* target = expression->getDirectCallee())
+        if (const auto* target = expression->getDirectCallee()) {
             collector_.add_use(caller_, target, EdgeKind::DirectCall, global_initializer_);
+            collector_.add_factory_construction(caller_, *expression, target, global_initializer_);
+        }
         if (const auto* callee = expression->getCallee())
             direct_callee_expressions_.insert(callee->IgnoreParenImpCasts());
         return true;
@@ -541,11 +580,12 @@ class UseVisitor : public clang::RecursiveASTVisitor<UseVisitor> {
 
 class FactConsumer : public clang::ASTConsumer {
   public:
-    FactConsumer(const CompileCommand& command, const IndexOptions& options, Graph& graph)
-        : command_(command), options_(options), graph_(graph) {}
+    FactConsumer(const CompileCommand& command, const IndexOptions& options, Graph& graph,
+                 std::vector<std::string>& diagnostics)
+        : command_(command), options_(options), graph_(graph), diagnostics_(diagnostics) {}
 
     void HandleTranslationUnit(clang::ASTContext& context) override {
-        TranslationUnitCollector collector(command_, options_, context, graph_);
+        TranslationUnitCollector collector(command_, options_, context, graph_, diagnostics_);
         UseVisitor uses(collector);
         uses.TraverseDecl(context.getTranslationUnitDecl());
     }
@@ -554,37 +594,42 @@ class FactConsumer : public clang::ASTConsumer {
     const CompileCommand& command_;
     const IndexOptions& options_;
     Graph& graph_;
+    std::vector<std::string>& diagnostics_;
 };
 
 class FactAction : public clang::ASTFrontendAction {
   public:
-    FactAction(const CompileCommand& command, const IndexOptions& options, Graph& graph)
-        : command_(command), options_(options), graph_(graph) {}
+    FactAction(const CompileCommand& command, const IndexOptions& options, Graph& graph,
+               std::vector<std::string>& diagnostics)
+        : command_(command), options_(options), graph_(graph), diagnostics_(diagnostics) {}
 
     std::unique_ptr<clang::ASTConsumer> CreateASTConsumer(clang::CompilerInstance&,
                                                           llvm::StringRef) override {
-        return std::make_unique<FactConsumer>(command_, options_, graph_);
+        return std::make_unique<FactConsumer>(command_, options_, graph_, diagnostics_);
     }
 
   private:
     const CompileCommand& command_;
     const IndexOptions& options_;
     Graph& graph_;
+    std::vector<std::string>& diagnostics_;
 };
 
 class FactActionFactory : public clang::tooling::FrontendActionFactory {
   public:
-    FactActionFactory(const CompileCommand& command, const IndexOptions& options, Graph& graph)
-        : command_(command), options_(options), graph_(graph) {}
+    FactActionFactory(const CompileCommand& command, const IndexOptions& options, Graph& graph,
+                      std::vector<std::string>& diagnostics)
+        : command_(command), options_(options), graph_(graph), diagnostics_(diagnostics) {}
 
     std::unique_ptr<clang::FrontendAction> create() override {
-        return std::make_unique<FactAction>(command_, options_, graph_);
+        return std::make_unique<FactAction>(command_, options_, graph_, diagnostics_);
     }
 
   private:
     const CompileCommand& command_;
     const IndexOptions& options_;
     Graph& graph_;
+    std::vector<std::string>& diagnostics_;
 };
 
 class SingleCommandDatabase : public clang::tooling::CompilationDatabase {
@@ -705,7 +750,7 @@ IndexResult LibToolingIndexer::index(const std::vector<CompileCommand>& commands
                 adjusted.emplace_back("-Wno-unknown-warning-option");
                 return adjusted;
             });
-        FactActionFactory factory(command, options_, translation_unit_facts);
+        FactActionFactory factory(command, options_, translation_unit_facts, result.diagnostics);
         const int exit_code = tool.run(&factory);
         if (exit_code != 0) {
             const auto message = "Clang LibTooling indexing failed for " + command.file.string() +

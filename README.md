@@ -10,7 +10,9 @@ The prototype already handles:
 
 - direct calls across translation units;
 - methods, constructors, and destructors;
-- constructor/destructor effects for base classes;
+- selected direct and alias construction with base/member initialization and cleanup effects;
+- conservative `std::make_unique`/`std::make_shared` construction and diagnosed owning-pointer
+  factory fallbacks;
 - conservative virtual dispatch across known class hierarchies;
 - address-taken functions as provider-attributed escape evidence;
 - `main()`, global-initializer calls, and manual roots;
@@ -29,8 +31,8 @@ The prototype already handles:
 - complete display signatures and exact spelling/expansion source extents.
 
 It does not yet infer library APIs, exactly model static-archive member extraction, model arbitrary
-registration/plugin systems, jointly analyze multiple build configurations in one report, or
-incrementally cache translation-unit facts.
+registration/plugin systems or non-owning factory semantics, jointly analyze multiple build
+configurations in one report, or incrementally cache translation-unit facts.
 Findings are candidates for review, not deletion instructions.
 
 ## Development status
@@ -312,6 +314,10 @@ The fixture in `tests/fixtures/application` intentionally contains live cross-TU
 ./build/cxx-dead tests/fixtures/application/compile_commands.json \
   --project-root tests/fixtures/application
 ```
+
+`tests/fixtures/construction` separately covers selected overloads, aliases, base/member lifetime
+effects, standard smart-pointer factories, a diagnosed custom owning-pointer factory, and negative
+controls for nested or borrowed owning pointers.
 
 ## Contributing and license
 

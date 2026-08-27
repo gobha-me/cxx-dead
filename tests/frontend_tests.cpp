@@ -108,6 +108,41 @@ void test_scope_frontend_parity() {
             "scope-separated LibTooling edges differ from AST JSON edges");
 }
 
+void test_construction_frontend_parity() {
+    const auto fixture = std::filesystem::path(CXX_DEAD_CONSTRUCTION_FIXTURE_DIR);
+    const auto source = fixture / "main.cpp";
+    const std::vector<cxx_dead::CompileCommand> commands{{
+        .directory = fixture,
+        .file = source,
+        .arguments = {"clang++", "-std=c++23", "-c", source.string(), "-o", "ignored.o"},
+    }};
+    const cxx_dead::IndexOptions options{
+        .project_root = fixture,
+        .ast_filter = "construction_fixture",
+        .manual_roots = {"construction_fixture::run"},
+    };
+    const auto ast = cxx_dead::ClangAstIndexer(options).index(commands);
+    const auto tooling = cxx_dead::LibToolingIndexer(options).index(commands);
+    require(report_json(ast) == report_json(tooling),
+            "construction LibTooling report differs from AST JSON report");
+    require(edge_facts(ast.graph) == edge_facts(tooling.graph),
+            "construction LibTooling edges differ from AST JSON edges\nAST:" +
+                joined(edge_facts(ast.graph)) +
+                "\nLibTooling:" + joined(edge_facts(tooling.graph)));
+
+    const auto unsupported_factory_diagnostics = [](const cxx_dead::IndexResult& indexed) {
+        std::vector<std::string> result;
+        std::ranges::copy_if(
+            indexed.diagnostics, std::back_inserter(result), [](const std::string& diagnostic) {
+                return diagnostic.starts_with("unsupported owning-pointer factory custom_factory");
+            });
+        return result;
+    };
+    require(unsupported_factory_diagnostics(ast) == unsupported_factory_diagnostics(tooling) &&
+                unsupported_factory_diagnostics(ast).size() == 1U,
+            "construction frontends produced different unsupported-factory diagnostics");
+}
+
 void test_exclusion_frontend_parity() {
     const auto fixture = std::filesystem::path(CXX_DEAD_GOLDEN_FIXTURE_DIR);
     const auto commands = cxx_dead::load_compilation_database(fixture / "compile_commands.json");
@@ -167,6 +202,7 @@ int main() {
         test_golden_frontend_parity();
         test_filtered_frontend_parity();
         test_scope_frontend_parity();
+        test_construction_frontend_parity();
         test_exclusion_frontend_parity();
         test_incomplete_libtooling_run_fails_closed();
         test_libtooling_hard_limits_are_explicitly_unsupported();

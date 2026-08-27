@@ -44,9 +44,12 @@ command normalization ---------------------------> AST JSON subprocess ----+
   It never evaluates compile commands through a shell.
 - `indexer` converts Clang AST JSON into declarations, provider-attributed calls,
   construction/destruction edges, address escapes, roots, record inheritance, and conservative
-  override edges. It assigns reportable, indexed, external-opaque, or excluded scope from configured
-  path boundaries, reconstructs compressed Clang source locations from byte offsets, preserves
-  spelling and macro-expansion extents, and materializes opaque references lazily.
+  override edges. Direct construction selects the observed constructor signature; standard
+  smart-pointer factories and other owning-pointer-returning helpers conservatively retain the
+  element's constructors and destructor, with unsupported helper semantics diagnosed. It assigns
+  reportable, indexed, external-opaque, or excluded scope from configured path boundaries,
+  reconstructs compressed Clang source locations from byte offsets, preserves spelling and
+  macro-expansion extents, and materializes opaque references lazily.
 - `libtooling_indexer` runs a `FrontendAction` and `RecursiveASTVisitor` over the same compilation
   commands and emits the same neutral facts directly. It is compiled only when
   `CXX_DEAD_ENABLE_LIBTOOLING=ON`.
@@ -60,7 +63,7 @@ command normalization ---------------------------> AST JSON subprocess ----+
 
 Each translation unit is merged as a separate neutral graph fact batch, so neither frontend needs
 to retain all frontend documents at once. The graph and report semantics remain Clang-independent;
-the parity suite requires identical golden and scope reports from both frontends.
+the parity suite requires identical golden, scope, and construction reports from both frontends.
 
 ## Symbol scope
 
@@ -78,6 +81,11 @@ Traversed edges:
 - `DirectCall`
 - `Constructs`
 - `VirtualDispatch`
+
+`Constructs` edges identify selected direct constructors, corresponding destructors, observed
+base/member initialization, and conservative smart-pointer factory lifetime effects. An
+unrecognized helper returning `unique_ptr<T>` or `shared_ptr<T>` retains `T` rather than emitting a
+high-confidence false positive and adds a deterministic diagnostic naming the helper.
 
 Non-traversed escape facts:
 

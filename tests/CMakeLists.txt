@@ -6,6 +6,7 @@ target_link_libraries(cxx_dead_tests PRIVATE cxx_dead_core)
 target_compile_features(cxx_dead_tests PRIVATE cxx_std_23)
 target_compile_definitions(cxx_dead_tests PRIVATE
     CXX_DEAD_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/application"
+    CXX_DEAD_CONSTRUCTION_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/construction"
     CXX_DEAD_PROCESS_FIXTURE="$<TARGET_FILE:cxx_dead_process_fixture>"
 )
 
@@ -86,6 +87,7 @@ if(CXX_DEAD_ENABLE_LIBTOOLING)
     target_compile_features(cxx_dead_frontend_tests PRIVATE cxx_std_23)
     target_compile_definitions(cxx_dead_frontend_tests PRIVATE
         CXX_DEAD_GOLDEN_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/golden"
+        CXX_DEAD_CONSTRUCTION_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/construction"
         CXX_DEAD_SCOPE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/scope"
     )
     add_test(NAME cxx_dead_frontend_tests COMMAND cxx_dead_frontend_tests)

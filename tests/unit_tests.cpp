@@ -32,6 +32,19 @@ cxx_dead::SymbolId find_symbol(const cxx_dead::Graph& graph, std::string_view qu
     throw std::runtime_error("missing symbol: " + std::string(qualified_name));
 }
 
+cxx_dead::SymbolId find_symbol(const cxx_dead::Graph& graph, std::string_view qualified_name,
+                               std::string_view signature) {
+    for (cxx_dead::SymbolId id = 0; id < graph.symbols().size(); ++id) {
+        const auto& symbol = graph.symbols()[id];
+        if (symbol.qualified_name == qualified_name && symbol.signature == signature &&
+            symbol.defined) {
+            return id;
+        }
+    }
+    throw std::runtime_error("missing symbol: " + std::string(qualified_name) + " " +
+                             std::string(signature));
+}
+
 void test_json() {
     const auto value =
         cxx_dead::json::parse(R"({"name":"cxx-dead","items":[1,true,null],"unicode":"\u03bb"})");
@@ -341,6 +354,64 @@ void test_clang_integration() {
             "configured root did not retain command-line evidence");
 }
 
+void test_implicit_construction_integration() {
+    const auto fixture = std::filesystem::path(CXX_DEAD_CONSTRUCTION_FIXTURE_DIR);
+    const auto source = fixture / "main.cpp";
+    const std::vector<cxx_dead::CompileCommand> commands{{
+        .directory = fixture,
+        .file = source,
+        .arguments = {"clang++", "-std=c++23", "-c", source.string(), "-o", "ignored.o"},
+    }};
+    const cxx_dead::IndexOptions options{
+        .project_root = fixture,
+        .ast_filter = "construction_fixture",
+        .manual_roots = {"construction_fixture::run"},
+    };
+    const auto indexed = cxx_dead::ClangAstIndexer(options).index(commands);
+    const auto reachability = cxx_dead::analyze_reachability(indexed.graph);
+
+    require(reachability.reachable[find_symbol(
+                indexed.graph, "construction_fixture::DirectProduct::DirectProduct", "void (int)")],
+            "direct construction through an alias did not retain the selected constructor");
+    require(
+        !reachability.reachable[find_symbol(
+            indexed.graph, "construction_fixture::DirectProduct::DirectProduct", "void (double)")],
+        "direct construction retained an unrelated constructor overload");
+    for (const auto signature :
+         {std::string_view{"void (int)"}, std::string_view{"void (double)"}}) {
+        require(
+            reachability.reachable[find_symbol(
+                indexed.graph, "construction_fixture::FactoryProduct::FactoryProduct", signature)],
+            "smart-pointer factory did not conservatively retain a constructor overload");
+    }
+    for (const auto name : {
+             "construction_fixture::DirectProduct::~DirectProduct",
+             "construction_fixture::FactoryProduct::~FactoryProduct",
+             "construction_fixture::Base::Base",
+             "construction_fixture::Base::~Base",
+             "construction_fixture::Member::Member",
+             "construction_fixture::Member::~Member",
+         }) {
+        require(reachability.reachable[find_symbol(indexed.graph, name)],
+                "construction or cleanup path was not retained");
+    }
+    for (const auto name : {
+             "construction_fixture::NonFactoryProduct::NonFactoryProduct",
+             "construction_fixture::NonFactoryProduct::~NonFactoryProduct",
+         }) {
+        require(!reachability.reachable[find_symbol(indexed.graph, name)],
+                "nested or borrowed owning pointer was treated as a factory result");
+    }
+    require(
+        std::ranges::any_of(
+            indexed.diagnostics,
+            [](const std::string& diagnostic) {
+                return diagnostic.contains("unsupported owning-pointer factory custom_factory") &&
+                       diagnostic.contains("conservatively retained construction and destruction");
+            }),
+        "unsupported owning-pointer factory did not produce a conservative diagnostic");
+}
+
 void test_libtooling_availability_contract() {
     if (cxx_dead::libtooling_available())
         return;
@@ -405,6 +476,7 @@ int main() {
         test_graph_algorithms();
         test_stable_identity_contract();
         test_clang_integration();
+        test_implicit_construction_integration();
         test_process_limits_and_cancellation();
         test_libtooling_availability_contract();
         std::cout << "all cxx-dead tests passed\n";

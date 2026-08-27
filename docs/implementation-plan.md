@@ -11,6 +11,9 @@ real-project reviews remain ongoing as new frontend behavior is added.
 
 v0.8.0 makes incomplete and unsupported runs machine-readable and adds hard wall-time and AST-output
 bounds to the subprocess frontend. Partial facts remain inaccessible to reporting.
+v0.9.0 adds a reduced 13-definition construction fixture covering selected overloads, aliases,
+base/member lifetimes, standard smart-pointer factories, a conservative custom-factory fallback,
+and negative controls for nested or borrowed owning pointers.
 
 Goal: make precision measurable before expanding language coverage.
 
@@ -50,7 +53,9 @@ Acceptance checks:
 
 Remaining hardening tasks:
 
-1. Add full implicit-call fixture coverage, including member/base initialization and cleanup paths.
+1. Add initial implicit-call fixture coverage for direct/alias construction, standard smart-pointer
+   factories, member/base initialization, and cleanup paths. (completed in v0.9.0; broader helper
+   semantics remain open)
 2. Limit global-initializer roots to project-owned, linked definitions.
 3. Extend the structured evidence model with provider-composed dynamic edges and suppressions.
 4. Add weak-component/type/directory aggregation above SCCs.

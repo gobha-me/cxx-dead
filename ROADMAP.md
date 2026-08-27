@@ -5,12 +5,15 @@ until the prototype has stable performance and precision measurements.
 
 ## M1 — Application-mode hardening
 
-Status: v0.8.0 adds fail-closed AST JSON resource limits, process-group cancellation, and structured
-complete/incomplete/unsupported run diagnostics. Language-modeling and corpus work remain open.
+Status: v0.9.0 adds selected direct/alias construction, base/member lifetime coverage, standard
+smart-pointer factory semantics, and conservative diagnostics for other owning-pointer factories.
+Callable, macro, and broader language-modeling work remain open.
 
 - Separate symbols needed for graph traversal from project-owned symbols eligible for reporting.
 - Represent roots, escapes, and classifications as structured evidence.
-- Improve implicit construction, destruction, lambda, callable, macro, and source-range coverage.
+- Improve implicit construction and destruction coverage. (initial factory/lifetime coverage
+  completed in v0.9.0)
+- Improve lambda, callable, macro, and source-range coverage.
 - Add resource limits and explicit incomplete-run diagnostics. (completed in v0.8.0)
 - Expand the golden fixture corpus and reviewed real-project result ledger.
 

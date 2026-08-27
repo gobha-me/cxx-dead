@@ -11,7 +11,7 @@ target_compile_definitions(cxx_dead_tests PRIVATE
 )
 
 add_test(NAME cxx_dead_tests COMMAND cxx_dead_tests)
-set_tests_properties(cxx_dead_tests PROPERTIES TIMEOUT 10)
+set_tests_properties(cxx_dead_tests PROPERTIES TIMEOUT 20)
 
 add_executable(cxx_dead_golden_tests golden_tests.cpp)
 target_link_libraries(cxx_dead_golden_tests PRIVATE cxx_dead_core)

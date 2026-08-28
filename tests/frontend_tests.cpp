@@ -1,3 +1,4 @@
+#include "cxx_dead/cache.h"
 #include "cxx_dead/compile_database.h"
 #include "cxx_dead/indexer.h"
 #include "cxx_dead/provider.h"
@@ -245,6 +246,32 @@ void test_libtooling_hard_limits_are_explicitly_unsupported() {
     }
 }
 
+void test_libtooling_incremental_cache() {
+    const auto fixture = std::filesystem::path(CXX_DEAD_GOLDEN_FIXTURE_DIR);
+    const auto cache = cxx_dead::cache_temporary_path("-libtooling-cache-test");
+    struct Cleanup {
+        std::filesystem::path path;
+        ~Cleanup() {
+            std::error_code error;
+            std::filesystem::remove_all(path, error);
+        }
+    } cleanup{cache};
+    const auto commands = cxx_dead::load_compilation_database(fixture / "compile_commands.json");
+    const cxx_dead::IndexOptions options{
+        .project_root = fixture,
+        .configuration_id = "libtooling-cache-test",
+        .cache_directory = cache,
+    };
+    const auto cold = cxx_dead::LibToolingIndexer(options).index(commands);
+    const auto warm = cxx_dead::LibToolingIndexer(options).index(commands);
+    require(cold.metrics.cache_hits == 0U && cold.metrics.cache_misses == commands.size(),
+            "cold LibTooling cache run did not index every translation unit");
+    require(warm.metrics.cache_hits == commands.size() && warm.metrics.cache_misses == 0U,
+            "warm LibTooling cache run did not reuse every translation unit");
+    require(report_json(cold) == report_json(warm),
+            "LibTooling cache reuse changed deterministic report output");
+}
+
 } // namespace
 
 int main() {
@@ -259,6 +286,7 @@ int main() {
         test_exclusion_frontend_parity();
         test_incomplete_libtooling_run_fails_closed();
         test_libtooling_hard_limits_are_explicitly_unsupported();
+        test_libtooling_incremental_cache();
         std::cout << "all frontend parity tests passed\n";
         return 0;
     } catch (const std::exception& error) {

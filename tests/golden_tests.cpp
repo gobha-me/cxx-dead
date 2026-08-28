@@ -1,4 +1,5 @@
 #include "cxx_dead/artifact.h"
+#include "cxx_dead/cache.h"
 #include "cxx_dead/compile_database.h"
 #include "cxx_dead/graph.h"
 #include "cxx_dead/indexer.h"
@@ -414,6 +415,14 @@ void test_excluded_generated_path() {
 
 void test_incomplete_indexing_fails_closed() {
     const auto fixture = std::filesystem::path(CXX_DEAD_GOLDEN_FIXTURE_DIR);
+    const auto cache = cxx_dead::cache_temporary_path("-incomplete-cache-test");
+    struct Cleanup {
+        std::filesystem::path path;
+        ~Cleanup() {
+            std::error_code error;
+            std::filesystem::remove_all(path, error);
+        }
+    } cleanup{cache};
     const auto source = fixture / "invalid.cpp";
     const auto fixture_commands =
         cxx_dead::load_compilation_database(fixture / "compile_commands.json");
@@ -425,7 +434,8 @@ void test_incomplete_indexing_fails_closed() {
     const std::vector<cxx_dead::CompileCommand> commands{fixture_commands.front(), invalid_command,
                                                          fixture_commands.back()};
     try {
-        const cxx_dead::ClangAstIndexer indexer({.project_root = fixture});
+        const cxx_dead::ClangAstIndexer indexer(
+            {.project_root = fixture, .cache_directory = cache});
         static_cast<void>(indexer.index(commands));
         throw std::runtime_error("invalid translation unit unexpectedly produced an index");
     } catch (const cxx_dead::IndexingError& error) {
@@ -448,6 +458,13 @@ void test_incomplete_indexing_fails_closed() {
         require(document.find("run") != nullptr && document.find("findings") == nullptr,
                 "incomplete JSON could be mistaken for a normal dead-code report");
     }
+    std::size_t published_entries = 0;
+    if (std::filesystem::exists(cache)) {
+        for (const auto& item : std::filesystem::recursive_directory_iterator(cache))
+            published_entries += item.is_regular_file() ? 1U : 0U;
+    }
+    require(published_entries == 0U,
+            "incomplete indexing run published partial translation-unit cache entries");
 }
 
 void test_resource_limits_fail_closed() {

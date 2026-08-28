@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <optional>
@@ -178,6 +179,11 @@ struct ReachabilityResult {
     std::vector<std::vector<SymbolId>> unreachable_sccs;
 };
 
+struct ReachabilityMetrics {
+    std::chrono::milliseconds traversal_time{0};
+    std::chrono::milliseconds scc_time{0};
+};
+
 [[nodiscard]] bool is_traversable(EdgeKind kind);
 [[nodiscard]] bool is_provider(EdgeKind kind);
 [[nodiscard]] bool is_provider(RootKind kind);
@@ -193,6 +199,8 @@ struct ReachabilityResult {
 void merge_graph(Graph& destination, const Graph& source);
 [[nodiscard]] std::size_t graph_fact_bytes(const Graph& graph);
 [[nodiscard]] ReachabilityResult analyze_reachability(const Graph& graph);
+[[nodiscard]] ReachabilityResult analyze_reachability(const Graph& graph,
+                                                      ReachabilityMetrics& metrics);
 [[nodiscard]] std::string_view to_string(SymbolKind kind);
 [[nodiscard]] std::string_view to_string(SymbolScope scope);
 [[nodiscard]] std::string_view to_string(EdgeKind kind);

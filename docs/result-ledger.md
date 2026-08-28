@@ -27,6 +27,8 @@ fact bytes are an in-memory neutral-fact payload estimate before cross-TU mergin
 
 | Run | Revision / environment | State | Reviewed findings | TP | FP | Known FN | Wall time | Peak RSS | AST / fact bytes | Defined / graph symbols | Edges |
 | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Golden corpus, AST JSON, warm TU cache | v0.13.0 candidate; Clang 20.1.8; Linux x86-64 | complete | 18 / 18 | 18 | 0 | 0 | 3 ms | 4,944 KiB | 0 / 24,160 | 39 / 40 | 20 |
+| Golden corpus, AST JSON, cold TU cache | v0.13.0 candidate; Clang 20.1.8; Linux x86-64 | complete | 18 / 18 | 18 | 0 | 0 | 76 ms | 95,144 KiB | 202,187 / 24,160 | 39 / 40 | 20 |
 | Shared-library API fixture, AST JSON/LibTooling | v0.12.0 candidate; CMake File API; Clang 20.1.8 | complete | 2 / 2 private findings plus 3 public API definitions | 2 | 0 | 0 | not benchmarked | not benchmarked | not captured | 5 / 6 | 0 |
 | Provider corpus, AST JSON | v0.11.0 candidate; Clang 20.1.8; Linux x86-64 | complete | 4 actionable + 1 suppressed / 5 | 5 | 0 | 0 | not benchmarked | not benchmarked | not captured | 10 / 10 | 3 |
 | Callable corpus, AST JSON | v0.10.0 candidate; Clang 20.1.8; Linux x86-64 | complete | 8 / 8 | 8 | 0 | 0 | 223 ms | 118,072 KiB | 124,067 / 11,445 | 16 / 16 | 9 |
@@ -63,6 +65,11 @@ sets remain advisory:
 the equal Null Vector count preserves the known framework callback limitation, while TermForge's
 frontend count difference reflects template-body traversal differences and is not evidence that
 either frontend's unique classification is safe.
+
+The v0.13.0 golden cache rows are consecutive invocations with the same explicit cache directory.
+The warm run validated and reused all three TU entries, emitted no AST JSON, and produced a
+byte-identical JSON report. Stage telemetry recorded 1 ms of cache validation and zero indexing
+time; measurements remain machine-specific and do not establish the large-application M2 gate.
 
 ## Golden review coverage
 

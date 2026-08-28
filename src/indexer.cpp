@@ -1,5 +1,6 @@
 #include "cxx_dead/indexer.h"
 
+#include "cxx_dead/cache.h"
 #include "cxx_dead/json.h"
 #include "cxx_dead/process.h"
 
@@ -25,6 +26,16 @@ using json::Value;
 struct RecordInfo {
     std::string name;
     std::vector<std::string> bases;
+};
+
+struct RemovePath {
+    std::filesystem::path path;
+    ~RemovePath() {
+        if (!path.empty()) {
+            std::error_code error;
+            std::filesystem::remove(path, error);
+        }
+    }
 };
 
 struct TranslationUnitState {
@@ -916,7 +927,9 @@ std::size_t compiler_argument_index(const std::vector<std::string>& arguments) {
     return 0;
 }
 
-std::vector<std::string> ast_command(const CompileCommand& command, const IndexOptions& options) {
+std::vector<std::string>
+ast_command(const CompileCommand& command, const IndexOptions& options,
+            const std::optional<std::filesystem::path>& dependency_file = std::nullopt) {
     std::vector<std::string> result{options.clang_executable};
     const auto compiler_index = compiler_argument_index(command.arguments);
     const std::set<std::string, std::less<>> flags_with_value{
@@ -950,6 +963,13 @@ std::vector<std::string> ast_command(const CompileCommand& command, const IndexO
         result.push_back("-ast-dump-filter=" + options.ast_filter);
     }
     result.emplace_back("-fsyntax-only");
+    if (dependency_file.has_value()) {
+        result.emplace_back("-MD");
+        result.emplace_back("-MF");
+        result.push_back(dependency_file->string());
+        result.emplace_back("-MT");
+        result.push_back(command.file.string());
+    }
     result.push_back(command.file.string());
     return result;
 }
@@ -1137,6 +1157,12 @@ ClangAstIndexer::ClangAstIndexer(IndexOptions options) : options_(std::move(opti
         source = std::filesystem::absolute(source).lexically_normal();
     for (auto& header : options_.public_headers)
         header = std::filesystem::absolute(header).lexically_normal();
+    if (options_.cache_directory.has_value()) {
+        if (options_.cache_directory->is_relative())
+            *options_.cache_directory = options_.project_root / *options_.cache_directory;
+        *options_.cache_directory =
+            std::filesystem::absolute(*options_.cache_directory).lexically_normal();
+    }
 }
 
 IndexResult ClangAstIndexer::index(const std::vector<CompileCommand>& commands) const {
@@ -1163,6 +1189,7 @@ IndexResult ClangAstIndexer::index(const std::vector<CompileCommand>& commands) 
     }
     std::unordered_map<std::string, RecordInfo> records;
     std::vector<bool> registration_rule_matches(options_.callback_registration_rules.size(), false);
+    std::vector<StagedCacheWrite> staged_cache_writes;
     const auto index_started = std::chrono::steady_clock::now();
 
     for (std::size_t command_index = 0; command_index < commands.size(); ++command_index) {
@@ -1171,6 +1198,84 @@ IndexResult ClangAstIndexer::index(const std::vector<CompileCommand>& commands) 
         if (options_.cancellation_requested && options_.cancellation_requested()) {
             fail_indexing(commands, result, command_index, TranslationUnitStatus::Cancelled,
                           "indexing", "indexing cancelled before " + command.file.string());
+        }
+
+        std::string cache_key;
+        if (options_.cache_directory.has_value()) {
+            cache_key = translation_unit_cache_key(command, options_, result.frontend);
+            const auto cache_started = std::chrono::steady_clock::now();
+            auto cached =
+                load_translation_unit_cache(*options_.cache_directory, cache_key, command.file);
+            result.metrics.cache_validation_time +=
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - cache_started);
+            result.metrics.cache_bytes_read += cached.bytes_read;
+            result.cache_warnings.insert(result.cache_warnings.end(), cached.warnings.begin(),
+                                         cached.warnings.end());
+            if (options_.cancellation_requested && options_.cancellation_requested()) {
+                fail_indexing(commands, result, command_index, TranslationUnitStatus::Cancelled,
+                              "cache_validation",
+                              "indexing cancelled while validating cached facts for " +
+                                  command.file.string());
+            }
+            if (options_.translation_unit_timeout.count() > 0 &&
+                std::chrono::steady_clock::now() - translation_unit_started >=
+                    options_.translation_unit_timeout) {
+                fail_indexing(commands, result, command_index, TranslationUnitStatus::TimedOut,
+                              "cache_validation",
+                              "translation-unit timeout while validating cached facts for " +
+                                  command.file.string());
+            }
+            if (options_.index_timeout.count() > 0 &&
+                std::chrono::steady_clock::now() - index_started >= options_.index_timeout) {
+                fail_indexing(commands, result, command_index, TranslationUnitStatus::TimedOut,
+                              "cache_validation",
+                              "index timeout while validating cached facts for " +
+                                  command.file.string());
+            }
+            if (cached.entry.has_value() && cached.entry->registration_rule_matches.size() !=
+                                                registration_rule_matches.size()) {
+                result.cache_warnings.push_back("ignored translation-unit cache entry with "
+                                                "incompatible callback metadata for " +
+                                                command.file.string());
+                cached.entry.reset();
+            }
+            if (cached.entry.has_value()) {
+                const auto merge_started = std::chrono::steady_clock::now();
+                merge_graph(result.graph, cached.entry->graph);
+                result.metrics.merge_time += std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - merge_started);
+                result.metrics.cache_hits += 1U;
+                result.fact_bytes += cached.entry->fact_bytes;
+                result.diagnostics.insert(result.diagnostics.end(),
+                                          cached.entry->diagnostics.begin(),
+                                          cached.entry->diagnostics.end());
+                for (std::size_t index = 0; index < registration_rule_matches.size(); ++index) {
+                    registration_rule_matches[index] =
+                        registration_rule_matches[index] ||
+                        cached.entry->registration_rule_matches[index];
+                }
+                for (const auto& cached_record : cached.entry->record_hierarchy) {
+                    auto& record = records[cached_record.name];
+                    record.name = cached_record.name;
+                    record.bases.insert(record.bases.end(), cached_record.bases.begin(),
+                                        cached_record.bases.end());
+                    std::ranges::sort(record.bases);
+                    record.bases.erase(std::ranges::unique(record.bases).begin(),
+                                       record.bases.end());
+                }
+                ++result.translation_units;
+                result.translation_unit_diagnostics.push_back({
+                    .file = command.file,
+                    .status = TranslationUnitStatus::Indexed,
+                    .stage = "indexing",
+                    .message = "translation unit indexed successfully",
+                    .exit_code = std::nullopt,
+                    .signal = std::nullopt,
+                });
+                continue;
+            }
+            result.metrics.cache_misses += 1U;
         }
 
         std::optional<std::chrono::milliseconds> process_timeout;
@@ -1191,8 +1296,13 @@ IndexResult ClangAstIndexer::index(const std::vector<CompileCommand>& commands) 
             }
         }
 
-        const auto invocation = ast_command(command, options_);
+        const auto dependency_file = options_.cache_directory.has_value()
+                                         ? std::optional{cache_temporary_path(".d")}
+                                         : std::nullopt;
+        RemovePath remove_dependency_file{dependency_file.value_or(std::filesystem::path{})};
+        const auto invocation = ast_command(command, options_, dependency_file);
         ProcessResult process;
+        const auto indexing_started = std::chrono::steady_clock::now();
         try {
             process = run_process(invocation, command.directory,
                                   {.timeout = process_timeout,
@@ -1226,10 +1336,10 @@ IndexResult ClangAstIndexer::index(const std::vector<CompileCommand>& commands) 
             fail_indexing(commands, result, command_index, TranslationUnitStatus::Failed, "clang",
                           message, process.exit_code, process.signal);
         }
-        if (options_.verbose && !process.standard_error.empty()) {
-            result.diagnostics.push_back(command.file.string() + ":\n" +
-                                         concise_diagnostic(process.standard_error));
-        }
+        std::vector<std::string> translation_unit_diagnostics;
+        if (options_.verbose && !process.standard_error.empty())
+            translation_unit_diagnostics.push_back(command.file.string() + ":\n" +
+                                                   concise_diagnostic(process.standard_error));
         result.ast_bytes += process.standard_output.size();
 
         std::vector<Value> ast_documents;
@@ -1244,6 +1354,9 @@ IndexResult ClangAstIndexer::index(const std::vector<CompileCommand>& commands) 
                 "invalid Clang AST JSON for " + command.file.string() + ": " + error.what());
         }
         Graph translation_unit_facts;
+        std::unordered_map<std::string, RecordInfo> translation_unit_records;
+        std::vector<bool> translation_unit_rule_matches(options_.callback_registration_rules.size(),
+                                                        false);
         TranslationUnitState state{
             .command = command,
             .options = options_,
@@ -1252,10 +1365,10 @@ IndexResult ClangAstIndexer::index(const std::vector<CompileCommand>& commands) 
             .declarations = {},
             .opaque_declarations = {},
             .callable_bindings = {},
-            .records = records,
+            .records = translation_unit_records,
             .line_offsets = {},
-            .diagnostics = result.diagnostics,
-            .registration_rule_matches = registration_rule_matches,
+            .diagnostics = translation_unit_diagnostics,
+            .registration_rule_matches = translation_unit_rule_matches,
         };
         try {
             for (const auto& ast : ast_documents)
@@ -1288,14 +1401,66 @@ IndexResult ClangAstIndexer::index(const std::vector<CompileCommand>& commands) 
                           "fact_collection",
                           "index timeout while collecting facts for " + command.file.string());
         }
+        result.metrics.indexing_time += std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - indexing_started);
+        const auto translation_unit_fact_bytes = graph_fact_bytes(translation_unit_facts);
+        if (options_.cache_directory.has_value()) {
+            try {
+                auto dependencies = parse_make_dependencies(*dependency_file, command.directory);
+                dependencies.push_back(command.file);
+                TranslationUnitCacheEntry entry{
+                    .graph = translation_unit_facts,
+                    .diagnostics = translation_unit_diagnostics,
+                    .registration_rule_matches = translation_unit_rule_matches,
+                    .record_hierarchy = {},
+                    .dependencies = hash_cache_dependencies(std::move(dependencies)),
+                    .ast_bytes = process.standard_output.size(),
+                    .fact_bytes = translation_unit_fact_bytes,
+                };
+                entry.record_hierarchy.reserve(translation_unit_records.size());
+                for (const auto& [name, record] : translation_unit_records) {
+                    auto bases = record.bases;
+                    std::ranges::sort(bases);
+                    bases.erase(std::ranges::unique(bases).begin(), bases.end());
+                    entry.record_hierarchy.push_back({.name = name, .bases = std::move(bases)});
+                }
+                std::ranges::sort(entry.record_hierarchy, {}, &CachedRecordHierarchy::name);
+                if (auto staged = stage_translation_unit_cache(*options_.cache_directory, cache_key,
+                                                               entry, result.cache_warnings)) {
+                    result.metrics.cache_bytes_written += staged->bytes();
+                    staged_cache_writes.push_back(std::move(*staged));
+                }
+            } catch (const std::exception& error) {
+                result.cache_warnings.push_back("could not cache facts for " +
+                                                command.file.string() + ": " + error.what());
+            }
+        }
         try {
-            result.fact_bytes += graph_fact_bytes(translation_unit_facts);
+            const auto merge_started = std::chrono::steady_clock::now();
+            result.fact_bytes += translation_unit_fact_bytes;
             merge_graph(result.graph, translation_unit_facts);
+            result.metrics.merge_time += std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - merge_started);
         } catch (const std::exception& error) {
             fail_indexing(commands, result, command_index, TranslationUnitStatus::Failed,
                           "fact_merge",
                           "could not merge Clang AST facts for " + command.file.string() + ": " +
                               error.what());
+        }
+        result.diagnostics.insert(result.diagnostics.end(), translation_unit_diagnostics.begin(),
+                                  translation_unit_diagnostics.end());
+        for (std::size_t index = 0; index < registration_rule_matches.size(); ++index) {
+            registration_rule_matches[index] =
+                registration_rule_matches[index] || translation_unit_rule_matches[index];
+        }
+        for (auto& [name, record] : translation_unit_records) {
+            auto& destination = records[name];
+            destination.name = name;
+            destination.bases.insert(destination.bases.end(), record.bases.begin(),
+                                     record.bases.end());
+            std::ranges::sort(destination.bases);
+            destination.bases.erase(std::ranges::unique(destination.bases).begin(),
+                                    destination.bases.end());
         }
         ++result.translation_units;
         result.translation_unit_diagnostics.push_back({
@@ -1385,6 +1550,8 @@ IndexResult ClangAstIndexer::index(const std::vector<CompileCommand>& commands) 
     std::ranges::sort(result.diagnostics);
     const auto duplicate = std::ranges::unique(result.diagnostics);
     result.diagnostics.erase(duplicate.begin(), duplicate.end());
+    for (auto& staged : staged_cache_writes)
+        staged.commit(result.cache_warnings);
     return result;
 }
 

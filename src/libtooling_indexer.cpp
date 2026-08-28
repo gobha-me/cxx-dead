@@ -1,5 +1,7 @@
 #include "cxx_dead/indexer.h"
 
+#include "cxx_dead/cache.h"
+
 #include <clang/AST/ASTConsumer.h>
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/Decl.h>
@@ -14,6 +16,8 @@
 #include <clang/Frontend/FrontendAction.h>
 #include <clang/Index/USRGeneration.h>
 #include <clang/Lex/Lexer.h>
+#include <clang/Lex/PPCallbacks.h>
+#include <clang/Lex/Preprocessor.h>
 #include <clang/Tooling/ArgumentsAdjusters.h>
 #include <clang/Tooling/CompilationDatabase.h>
 #include <clang/Tooling/Tooling.h>
@@ -35,6 +39,26 @@
 namespace cxx_dead {
 
 namespace {
+
+class DependencyCollector : public clang::PPCallbacks {
+  public:
+    DependencyCollector(clang::SourceManager& source_manager,
+                        std::vector<std::filesystem::path>& dependencies)
+        : source_manager_(source_manager), dependencies_(dependencies) {}
+
+    void FileChanged(clang::SourceLocation location, FileChangeReason reason,
+                     clang::SrcMgr::CharacteristicKind, clang::FileID = clang::FileID()) override {
+        if (reason != EnterFile || location.isInvalid())
+            return;
+        const auto file = source_manager_.getFileEntryRefForID(source_manager_.getFileID(location));
+        if (file.has_value())
+            dependencies_.emplace_back(file->getName().str());
+    }
+
+  private:
+    clang::SourceManager& source_manager_;
+    std::vector<std::filesystem::path>& dependencies_;
+};
 
 std::filesystem::path absolute_normalized(std::filesystem::path path,
                                           const std::filesystem::path& base) {
@@ -770,9 +794,16 @@ class FactConsumer : public clang::ASTConsumer {
 class FactAction : public clang::ASTFrontendAction {
   public:
     FactAction(const CompileCommand& command, const IndexOptions& options, Graph& graph,
-               std::vector<std::string>& diagnostics, std::vector<bool>& registration_rule_matches)
+               std::vector<std::string>& diagnostics, std::vector<bool>& registration_rule_matches,
+               std::vector<std::filesystem::path>& dependencies)
         : command_(command), options_(options), graph_(graph), diagnostics_(diagnostics),
-          registration_rule_matches_(registration_rule_matches) {}
+          registration_rule_matches_(registration_rule_matches), dependencies_(dependencies) {}
+
+    bool BeginSourceFileAction(clang::CompilerInstance& instance) override {
+        instance.getPreprocessor().addPPCallbacks(
+            std::make_unique<DependencyCollector>(instance.getSourceManager(), dependencies_));
+        return true;
+    }
 
     std::unique_ptr<clang::ASTConsumer> CreateASTConsumer(clang::CompilerInstance&,
                                                           llvm::StringRef) override {
@@ -786,19 +817,21 @@ class FactAction : public clang::ASTFrontendAction {
     Graph& graph_;
     std::vector<std::string>& diagnostics_;
     std::vector<bool>& registration_rule_matches_;
+    std::vector<std::filesystem::path>& dependencies_;
 };
 
 class FactActionFactory : public clang::tooling::FrontendActionFactory {
   public:
     FactActionFactory(const CompileCommand& command, const IndexOptions& options, Graph& graph,
                       std::vector<std::string>& diagnostics,
-                      std::vector<bool>& registration_rule_matches)
+                      std::vector<bool>& registration_rule_matches,
+                      std::vector<std::filesystem::path>& dependencies)
         : command_(command), options_(options), graph_(graph), diagnostics_(diagnostics),
-          registration_rule_matches_(registration_rule_matches) {}
+          registration_rule_matches_(registration_rule_matches), dependencies_(dependencies) {}
 
     std::unique_ptr<clang::FrontendAction> create() override {
         return std::make_unique<FactAction>(command_, options_, graph_, diagnostics_,
-                                            registration_rule_matches_);
+                                            registration_rule_matches_, dependencies_);
     }
 
   private:
@@ -807,6 +840,7 @@ class FactActionFactory : public clang::tooling::FrontendActionFactory {
     Graph& graph_;
     std::vector<std::string>& diagnostics_;
     std::vector<bool>& registration_rule_matches_;
+    std::vector<std::filesystem::path>& dependencies_;
 };
 
 class SingleCommandDatabase : public clang::tooling::CompilationDatabase {
@@ -861,6 +895,12 @@ LibToolingIndexer::LibToolingIndexer(IndexOptions options) : options_(std::move(
         source = std::filesystem::absolute(source).lexically_normal();
     for (auto& header : options_.public_headers)
         header = std::filesystem::absolute(header).lexically_normal();
+    if (options_.cache_directory.has_value()) {
+        if (options_.cache_directory->is_relative())
+            *options_.cache_directory = options_.project_root / *options_.cache_directory;
+        *options_.cache_directory =
+            std::filesystem::absolute(*options_.cache_directory).lexically_normal();
+    }
 }
 
 IndexResult LibToolingIndexer::index(const std::vector<CompileCommand>& commands) const {
@@ -886,6 +926,7 @@ IndexResult LibToolingIndexer::index(const std::vector<CompileCommand>& commands
                              .translation_units = {}});
     }
     std::vector<bool> registration_rule_matches(options_.callback_registration_rules.size(), false);
+    std::vector<StagedCacheWrite> staged_cache_writes;
     if (options_.translation_unit_timeout.count() > 0 || options_.index_timeout.count() > 0 ||
         options_.max_ast_bytes != 0) {
         RunDiagnostics diagnostics{
@@ -936,7 +977,86 @@ IndexResult LibToolingIndexer::index(const std::vector<CompileCommand>& commands
             }
             throw IndexingError("LibTooling indexing cancelled", std::move(diagnostics));
         }
+        std::string cache_key;
+        if (options_.cache_directory.has_value()) {
+            cache_key = translation_unit_cache_key(command, options_, result.frontend);
+            const auto cache_started = std::chrono::steady_clock::now();
+            auto cached =
+                load_translation_unit_cache(*options_.cache_directory, cache_key, command.file);
+            result.metrics.cache_validation_time +=
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - cache_started);
+            result.metrics.cache_bytes_read += cached.bytes_read;
+            result.cache_warnings.insert(result.cache_warnings.end(), cached.warnings.begin(),
+                                         cached.warnings.end());
+            if (options_.cancellation_requested && options_.cancellation_requested()) {
+                RunDiagnostics diagnostics{
+                    .state = RunState::Incomplete,
+                    .frontend = result.frontend,
+                    .partial_graph_discarded = !result.translation_unit_diagnostics.empty(),
+                    .translation_units = result.translation_unit_diagnostics,
+                };
+                diagnostics.translation_units.push_back({
+                    .file = command.file,
+                    .status = TranslationUnitStatus::Cancelled,
+                    .stage = "cache_validation",
+                    .message = "indexing cancelled while validating cached facts",
+                    .exit_code = std::nullopt,
+                    .signal = std::nullopt,
+                });
+                for (std::size_t index = command_index + 1U; index < commands.size(); ++index) {
+                    diagnostics.translation_units.push_back({
+                        .file = commands[index].file,
+                        .status = TranslationUnitStatus::Skipped,
+                        .stage = "indexing",
+                        .message =
+                            "not indexed because an earlier translation unit did not complete",
+                        .exit_code = std::nullopt,
+                        .signal = std::nullopt,
+                    });
+                }
+                throw IndexingError("LibTooling indexing cancelled", std::move(diagnostics));
+            }
+            if (cached.entry.has_value() && cached.entry->registration_rule_matches.size() !=
+                                                registration_rule_matches.size()) {
+                result.cache_warnings.push_back("ignored translation-unit cache entry with "
+                                                "incompatible callback metadata for " +
+                                                command.file.string());
+                cached.entry.reset();
+            }
+            if (cached.entry.has_value()) {
+                const auto merge_started = std::chrono::steady_clock::now();
+                merge_graph(result.graph, cached.entry->graph);
+                result.metrics.merge_time += std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - merge_started);
+                result.metrics.cache_hits += 1U;
+                result.fact_bytes += cached.entry->fact_bytes;
+                result.diagnostics.insert(result.diagnostics.end(),
+                                          cached.entry->diagnostics.begin(),
+                                          cached.entry->diagnostics.end());
+                for (std::size_t index = 0; index < registration_rule_matches.size(); ++index) {
+                    registration_rule_matches[index] =
+                        registration_rule_matches[index] ||
+                        cached.entry->registration_rule_matches[index];
+                }
+                ++result.translation_units;
+                result.translation_unit_diagnostics.push_back({
+                    .file = command.file,
+                    .status = TranslationUnitStatus::Indexed,
+                    .stage = "indexing",
+                    .message = "translation unit indexed successfully",
+                    .exit_code = std::nullopt,
+                    .signal = std::nullopt,
+                });
+                continue;
+            }
+            result.metrics.cache_misses += 1U;
+        }
         Graph translation_unit_facts;
+        std::vector<std::string> translation_unit_diagnostics;
+        std::vector<bool> translation_unit_rule_matches(options_.callback_registration_rules.size(),
+                                                        false);
+        std::vector<std::filesystem::path> dependencies{command.file};
         SingleCommandDatabase database(command);
         clang::tooling::ClangTool tool(database, {command.file.string()});
         tool.appendArgumentsAdjuster(clang::tooling::getClangStripOutputAdjuster());
@@ -949,9 +1069,13 @@ IndexResult LibToolingIndexer::index(const std::vector<CompileCommand>& commands
                 adjusted.emplace_back("-Wno-unknown-warning-option");
                 return adjusted;
             });
-        FactActionFactory factory(command, options_, translation_unit_facts, result.diagnostics,
-                                  registration_rule_matches);
+        FactActionFactory factory(command, options_, translation_unit_facts,
+                                  translation_unit_diagnostics, translation_unit_rule_matches,
+                                  dependencies);
+        const auto indexing_started = std::chrono::steady_clock::now();
         const int exit_code = tool.run(&factory);
+        result.metrics.indexing_time += std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - indexing_started);
         if (exit_code != 0) {
             const auto message = "Clang LibTooling indexing failed for " + command.file.string() +
                                  " (exit " + std::to_string(exit_code) + ")";
@@ -981,9 +1105,38 @@ IndexResult LibToolingIndexer::index(const std::vector<CompileCommand>& commands
             }
             throw IndexingError(message, std::move(diagnostics));
         }
+        const auto translation_unit_fact_bytes = graph_fact_bytes(translation_unit_facts);
+        if (options_.cache_directory.has_value()) {
+            try {
+                for (auto& dependency : dependencies) {
+                    if (dependency.is_relative())
+                        dependency = command.directory / dependency;
+                }
+                TranslationUnitCacheEntry entry{
+                    .graph = translation_unit_facts,
+                    .diagnostics = translation_unit_diagnostics,
+                    .registration_rule_matches = translation_unit_rule_matches,
+                    .record_hierarchy = {},
+                    .dependencies = hash_cache_dependencies(std::move(dependencies)),
+                    .ast_bytes = 0,
+                    .fact_bytes = translation_unit_fact_bytes,
+                };
+                if (auto staged = stage_translation_unit_cache(*options_.cache_directory, cache_key,
+                                                               entry, result.cache_warnings)) {
+                    result.metrics.cache_bytes_written += staged->bytes();
+                    staged_cache_writes.push_back(std::move(*staged));
+                }
+            } catch (const std::exception& error) {
+                result.cache_warnings.push_back("could not cache facts for " +
+                                                command.file.string() + ": " + error.what());
+            }
+        }
         try {
-            result.fact_bytes += graph_fact_bytes(translation_unit_facts);
+            const auto merge_started = std::chrono::steady_clock::now();
+            result.fact_bytes += translation_unit_fact_bytes;
             merge_graph(result.graph, translation_unit_facts);
+            result.metrics.merge_time += std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - merge_started);
         } catch (const std::exception& error) {
             const auto message = "could not merge LibTooling facts for " + command.file.string() +
                                  ": " + error.what();
@@ -1012,6 +1165,12 @@ IndexResult LibToolingIndexer::index(const std::vector<CompileCommand>& commands
                 });
             }
             throw IndexingError(message, std::move(diagnostics));
+        }
+        result.diagnostics.insert(result.diagnostics.end(), translation_unit_diagnostics.begin(),
+                                  translation_unit_diagnostics.end());
+        for (std::size_t index = 0; index < registration_rule_matches.size(); ++index) {
+            registration_rule_matches[index] =
+                registration_rule_matches[index] || translation_unit_rule_matches[index];
         }
         ++result.translation_units;
         result.translation_unit_diagnostics.push_back({
@@ -1090,6 +1249,8 @@ IndexResult LibToolingIndexer::index(const std::vector<CompileCommand>& commands
     std::ranges::sort(result.diagnostics);
     const auto duplicate = std::ranges::unique(result.diagnostics);
     result.diagnostics.erase(duplicate.begin(), duplicate.end());
+    for (auto& staged : staged_cache_writes)
+        staged.commit(result.cache_warnings);
     return result;
 }
 

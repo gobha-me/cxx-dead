@@ -42,6 +42,9 @@ command normalization ---------------------------> AST JSON subprocess ----+
 - `process` runs Clang directly with `fork`/`execvp`, captures stdout/stderr concurrently, applies
   wall-time/output bounds, and terminates the dedicated child process group on limit or cancellation.
   It never evaluates compile commands through a shell.
+- `cache` hashes normalized frontend/tool/command inputs and compiler-reported dependencies,
+  validates a versioned per-TU fact representation, and stages same-directory atomic writes for
+  publication only after a complete indexing run.
 - `indexer` converts Clang AST JSON into declarations, provider-attributed calls,
   construction/destruction edges, address escapes, roots, record inheritance, and conservative
   override edges. Direct construction selects the observed constructor signature; standard
@@ -64,6 +67,9 @@ command normalization ---------------------------> AST JSON subprocess ----+
 Each translation unit is merged as a separate neutral graph fact batch, so neither frontend needs
 to retain all frontend documents at once. The graph and report semantics remain Clang-independent;
 the parity suite requires identical golden, scope, and construction reports from both frontends.
+The CLI enables a project-local cache by default while direct library callers opt in through
+`IndexOptions`. Cached batches retain the auxiliary class-hierarchy and callback-match facts needed
+for whole-index validation; cache hit/miss state is telemetry only and does not alter run JSON.
 
 ## Symbol scope
 
@@ -198,4 +204,8 @@ conservatively.
 
 ## Security boundary
 
-Commands are passed as argument arrays, not shell strings. Output and dependency flags are removed before adding AST flags. As with normal builds, the compilation database is trusted input: response files, compiler plugins, and paths can still cause Clang to load repository-selected content.
+Commands are passed as argument arrays, not shell strings. Existing output and dependency flags
+are removed before the AST frontend adds its own syntax-only dependency manifest. As with normal
+builds, the compilation database and project-local cache are trusted inputs: response files,
+compiler plugins, and paths can still cause Clang to load repository-selected content. Cache data
+is schema-checked and cannot bypass dependency-content validation; corrupt entries are rebuilt.

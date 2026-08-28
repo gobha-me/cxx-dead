@@ -79,10 +79,21 @@ struct IndexOptions {
     std::chrono::milliseconds translation_unit_timeout{0};
     std::chrono::milliseconds index_timeout{0};
     std::size_t max_ast_bytes{0};
+    std::optional<std::filesystem::path> cache_directory;
     std::function<bool()> cancellation_requested;
     bool verbose{false};
     bool infer_shared_library_exports{false};
     bool require_library_api_policy{false};
+};
+
+struct IndexMetrics {
+    std::size_t cache_hits{0};
+    std::size_t cache_misses{0};
+    std::size_t cache_bytes_read{0};
+    std::size_t cache_bytes_written{0};
+    std::chrono::milliseconds cache_validation_time{0};
+    std::chrono::milliseconds indexing_time{0};
+    std::chrono::milliseconds merge_time{0};
 };
 
 struct IndexResult {
@@ -92,6 +103,8 @@ struct IndexResult {
     std::size_t translation_units{0};
     std::size_t ast_bytes{0};
     std::size_t fact_bytes{0};
+    IndexMetrics metrics;
+    std::vector<std::string> cache_warnings;
     std::vector<TranslationUnitDiagnostic> translation_unit_diagnostics;
 };
 

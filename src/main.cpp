@@ -32,6 +32,7 @@ struct CliOptions {
     std::vector<std::filesystem::path> excluded_paths;
     std::optional<std::filesystem::path> output;
     std::optional<std::filesystem::path> graph_output;
+    std::optional<std::filesystem::path> cache_directory;
     std::optional<std::filesystem::path> cmake_build_directory;
     std::optional<std::filesystem::path> target_manifest;
     std::string format{"human"};
@@ -52,6 +53,7 @@ struct CliOptions {
     bool configuration_id_explicit{false};
     bool project_root_explicit{false};
     bool fail_on_unreachable{false};
+    bool no_cache{false};
 };
 
 void usage(std::ostream& output) {
@@ -85,8 +87,10 @@ Options:
   --format human|json      Output format (default: human)
   --output PATH             Write the report to a file
   --graph-output PATH       Write deterministic graph artifact JSON to a file
+  --cache-dir PATH          Store reusable TU facts here (default: PROJECT/.cxx-dead/cache)
+  --no-cache                Disable translation-unit cache reads and writes
   --fail-on-unreachable     Exit with status 2 when candidates are found
-  --verbose                 Include Clang indexing diagnostics
+  --verbose                 Include Clang diagnostics and stage metrics
   --help                    Show this help
   --version                 Show the version
 )";
@@ -125,7 +129,7 @@ CliOptions parse_cli(int count, char** arguments) {
             std::exit(0);
         }
         if (argument == "--version") {
-            std::cout << "cxx-dead 0.12.0\n";
+            std::cout << "cxx-dead 0.13.0\n";
             std::exit(0);
         }
         if (argument == "--compile-commands") {
@@ -210,6 +214,10 @@ CliOptions parse_cli(int count, char** arguments) {
             options.output = require_value(index, count, arguments, argument);
         } else if (argument == "--graph-output") {
             options.graph_output = require_value(index, count, arguments, argument);
+        } else if (argument == "--cache-dir") {
+            options.cache_directory = require_value(index, count, arguments, argument);
+        } else if (argument == "--no-cache") {
+            options.no_cache = true;
         } else if (argument == "--verbose") {
             options.verbose = true;
         } else if (argument == "--fail-on-unreachable") {
@@ -255,6 +263,11 @@ CliOptions parse_cli(int count, char** arguments) {
         options.graph_output = std::filesystem::absolute(*options.graph_output).lexically_normal();
     if (options.output.has_value() && options.graph_output == options.output)
         throw std::runtime_error("--output and --graph-output must name different files");
+    if (options.no_cache && options.cache_directory.has_value())
+        throw std::runtime_error("--cache-dir and --no-cache are mutually exclusive");
+    if (options.cache_directory.has_value())
+        options.cache_directory =
+            std::filesystem::absolute(*options.cache_directory).lexically_normal();
     if (options.translation_unit_root.has_value()) {
         options.translation_unit_root =
             std::filesystem::absolute(*options.translation_unit_root).lexically_normal();
@@ -330,6 +343,8 @@ int main(int argc, char** argv) {
             if (commands.empty())
                 throw std::runtime_error("--tu-root excluded every compilation command");
         }
+        if (!options.no_cache && !options.cache_directory.has_value())
+            options.cache_directory = options.project_root / ".cxx-dead" / "cache";
         const auto has_public_api_roots =
             std::ranges::any_of(provider_policies, [](const cxx_dead::ProviderPolicy& policy) {
                 return !policy.public_api_roots.empty();
@@ -370,6 +385,7 @@ int main(int argc, char** argv) {
             .translation_unit_timeout = options.translation_unit_timeout,
             .index_timeout = options.index_timeout,
             .max_ast_bytes = options.max_ast_bytes,
+            .cache_directory = options.cache_directory,
             .cancellation_requested = [] { return cancellation_signal != 0; },
             .verbose = options.verbose,
             .infer_shared_library_exports = infer_shared_library_exports,
@@ -423,26 +439,16 @@ int main(int argc, char** argv) {
             indexed.diagnostics.erase(std::ranges::unique(indexed.diagnostics).begin(),
                                       indexed.diagnostics.end());
         }
-        const auto elapsed = std::chrono::steady_clock::now() - started;
-        if (options.verbose) {
-            rusage self_usage{};
-            rusage child_usage{};
-            const auto self_peak =
-                ::getrusage(RUSAGE_SELF, &self_usage) == 0 ? self_usage.ru_maxrss : 0;
-            const auto child_peak =
-                ::getrusage(RUSAGE_CHILDREN, &child_usage) == 0 ? child_usage.ru_maxrss : 0;
-            const auto peak_rss = std::max(self_peak, child_peak);
-            std::cerr << "cxx-dead-index-metrics"
-                      << " frontend=" << cxx_dead::to_string(indexed.frontend)
-                      << " translation_units=" << indexed.translation_units
-                      << " ast_bytes=" << indexed.ast_bytes << " fact_bytes=" << indexed.fact_bytes
-                      << " wall_ms="
-                      << std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()
-                      << " peak_rss_kib=" << peak_rss
-                      << " symbols=" << indexed.graph.symbols().size()
-                      << " edges=" << indexed.graph.edges().size() << '\n';
-        }
-        const auto reachability = cxx_dead::analyze_reachability(indexed.graph);
+        std::ranges::sort(indexed.cache_warnings);
+        indexed.cache_warnings.erase(std::ranges::unique(indexed.cache_warnings).begin(),
+                                     indexed.cache_warnings.end());
+        for (const auto& warning : indexed.cache_warnings)
+            std::cerr << "cxx-dead: warning: " << warning << '\n';
+
+        cxx_dead::ReachabilityMetrics reachability_metrics;
+        const auto reachability =
+            cxx_dead::analyze_reachability(indexed.graph, reachability_metrics);
+        const auto reporting_started = std::chrono::steady_clock::now();
         const auto report = cxx_dead::build_report(indexed.graph, reachability);
         report_metadata.run = {
             .state = cxx_dead::RunState::Complete,
@@ -472,6 +478,10 @@ int main(int argc, char** argv) {
             }
             cxx_dead::write_graph_artifact(graph_output, indexed.graph, artifact_metadata,
                                            indexed.diagnostics);
+            graph_output.flush();
+            if (!graph_output)
+                throw std::runtime_error("could not write graph artifact: " +
+                                         options.graph_output->string());
         }
 
         std::ofstream file_output;
@@ -488,6 +498,40 @@ int main(int argc, char** argv) {
         } else {
             cxx_dead::write_human_report(*output, indexed.graph, reachability, report,
                                          indexed.diagnostics, report_metadata);
+        }
+        output->flush();
+        if (!*output)
+            throw std::runtime_error("could not write analysis report");
+        const auto reporting_time = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - reporting_started);
+        const auto wall_time = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - started);
+        if (options.verbose) {
+            rusage self_usage{};
+            rusage child_usage{};
+            const auto self_peak =
+                ::getrusage(RUSAGE_SELF, &self_usage) == 0 ? self_usage.ru_maxrss : 0;
+            const auto child_peak =
+                ::getrusage(RUSAGE_CHILDREN, &child_usage) == 0 ? child_usage.ru_maxrss : 0;
+            const auto peak_rss = std::max(self_peak, child_peak);
+            std::cerr << "cxx-dead-index-metrics"
+                      << " frontend=" << cxx_dead::to_string(indexed.frontend)
+                      << " translation_units=" << indexed.translation_units
+                      << " indexed_tus=" << indexed.translation_units - indexed.metrics.cache_hits
+                      << " reused_tus=" << indexed.metrics.cache_hits
+                      << " cache_misses=" << indexed.metrics.cache_misses
+                      << " ast_bytes=" << indexed.ast_bytes << " fact_bytes=" << indexed.fact_bytes
+                      << " cache_read_bytes=" << indexed.metrics.cache_bytes_read
+                      << " cache_write_bytes=" << indexed.metrics.cache_bytes_written
+                      << " cache_validation_ms=" << indexed.metrics.cache_validation_time.count()
+                      << " indexing_ms=" << indexed.metrics.indexing_time.count()
+                      << " merging_ms=" << indexed.metrics.merge_time.count()
+                      << " traversal_ms=" << reachability_metrics.traversal_time.count()
+                      << " scc_ms=" << reachability_metrics.scc_time.count()
+                      << " reporting_ms=" << reporting_time.count()
+                      << " wall_ms=" << wall_time.count() << " peak_rss_kib=" << peak_rss
+                      << " symbols=" << indexed.graph.symbols().size()
+                      << " edges=" << indexed.graph.edges().size() << '\n';
         }
         return options.fail_on_unreachable && !report.findings.empty() ? 2 : 0;
     } catch (const std::exception& error) {

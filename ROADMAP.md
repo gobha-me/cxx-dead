@@ -22,12 +22,17 @@ dead, and every high-confidence finding has a useful explanation.
 
 ## M2 — Scalable indexing
 
+Status: v0.13.0 adds dependency-validated deterministic per-TU fact caching for both frontends and
+separates cache validation, indexing, merging, traversal, SCC, and reporting telemetry. Bounded
+parallelism and large-application budget validation remain open.
+
 - Promote the measured LibTooling prototype from its optional frontend into the scalable indexing
   path without removing the dependency-light AST JSON fallback.
 - Maintain the v0.6.0 configuration-aware cross-translation-unit identities and graph artifact
   schema as compatibility contracts.
-- Store deterministic per-TU facts with command/content hashing.
-- Add bounded parallelism, incremental invalidation, and resource telemetry.
+- Store deterministic per-TU facts with command/content hashing. (completed in v0.13.0)
+- Add bounded parallelism, incremental invalidation, and resource telemetry. (incremental
+  invalidation and telemetry completed in v0.13.0; parallelism remains open)
 
 Exit criterion: a large application can be analyzed within a documented time and memory budget
 without precision regressions.

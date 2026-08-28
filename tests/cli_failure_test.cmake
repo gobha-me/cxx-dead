@@ -12,6 +12,7 @@ execute_process(
     COMMAND "${CXX_DEAD_EXECUTABLE}"
         "${CXX_DEAD_GOLDEN_FIXTURE}/compile_commands.json"
         --project-root "${CXX_DEAD_GOLDEN_FIXTURE}"
+        --no-cache
         --format json
         --output "${REPORT}"
         --graph-output "${GRAPH}"

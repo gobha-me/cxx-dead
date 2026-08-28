@@ -76,6 +76,7 @@ add_test(
         --cmake-build-dir "${TARGET_FIXTURE_BUILD}"
         --configuration Debug
         --target production_app
+        --no-cache
         --format json
 )
 set_tests_properties(cxx_dead_target_cli PROPERTIES
@@ -89,6 +90,7 @@ add_test(
         --cmake-build-dir "${TARGET_FIXTURE_BUILD}"
         --configuration Debug
         --target shared
+        --no-cache
         --format json
 )
 set_tests_properties(cxx_dead_shared_library_cli PROPERTIES
@@ -103,6 +105,7 @@ add_test(
         --configuration Debug
         --target core
         --provider-config "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/targets/core-api.yaml"
+        --no-cache
         --format json
 )
 set_tests_properties(cxx_dead_static_library_cli PROPERTIES
@@ -115,6 +118,7 @@ add_test(
         --cmake-build-dir "${TARGET_FIXTURE_BUILD}"
         --configuration Debug
         --target core
+        --no-cache
         --format json
 )
 set_tests_properties(cxx_dead_static_missing_policy_cli PROPERTIES
@@ -140,6 +144,7 @@ add_test(
         "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/scope/compile_commands.json"
         --project-root "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/scope"
         --report-path "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/scope/app"
+        --no-cache
         --format json
 )
 set_tests_properties(cxx_dead_scope_cli PROPERTIES
@@ -155,6 +160,7 @@ add_test(
         --root callable_fixture::run
         --callback-registration callable_fixture::registrar:0
         --callback-registration callable_fixture::member_registrar:0
+        --no-cache
         --format json
 )
 set_tests_properties(cxx_dead_callable_cli PROPERTIES
@@ -176,6 +182,7 @@ add_test(
         --project-root "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/providers"
         --ast-filter provider_fixture
         --provider-config "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/providers/provider.yaml"
+        --no-cache
         --format json
 )
 set_tests_properties(cxx_dead_provider_cli PROPERTIES
@@ -190,6 +197,7 @@ add_test(
         --ast-filter provider_fixture
         --provider-config "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/providers/provider.yaml"
         --provider-config "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/providers/suppress-all.yaml"
+        --no-cache
         --fail-on-unreachable
         --format json
 )
@@ -214,3 +222,21 @@ add_test(
         -DCXX_DEAD_FAILURE_DIR=${CMAKE_CURRENT_BINARY_DIR}/incomplete-cli
         -P ${CMAKE_CURRENT_SOURCE_DIR}/cli_failure_test.cmake
 )
+
+add_test(
+    NAME cxx_dead_cache_cli
+    COMMAND "${CMAKE_COMMAND}"
+        -DCXX_DEAD_EXECUTABLE=$<TARGET_FILE:cxx-dead>
+        -DCXX_DEAD_FIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/fixtures/golden
+        -DCXX_DEAD_CACHE_DIR=${CMAKE_CURRENT_BINARY_DIR}/cache-cli/cache
+        -DCXX_DEAD_DEFAULT_WORKSPACE=${CMAKE_CURRENT_BINARY_DIR}/cache-cli/default-workspace
+        -DCXX_DEAD_COLD_REPORT=${CMAKE_CURRENT_BINARY_DIR}/cache-cli/cold.json
+        -DCXX_DEAD_WARM_REPORT=${CMAKE_CURRENT_BINARY_DIR}/cache-cli/warm.json
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/cache_cli_test.cmake
+)
+
+add_test(
+    NAME cxx_dead_cache_option_conflict
+    COMMAND $<TARGET_FILE:cxx-dead> --cache-dir cache --no-cache
+)
+set_tests_properties(cxx_dead_cache_option_conflict PROPERTIES WILL_FAIL TRUE)

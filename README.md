@@ -29,13 +29,14 @@ The prototype already handles:
 - target-scoped analysis from CMake File API or explicit manifest metadata;
 - conservative shared/static library public-API rooting from source metadata;
 - bounded AST JSON indexing with per-TU/run timeouts and output-size limits;
+- dependency-validated incremental per-TU fact caching with atomic corruption recovery;
 - structured complete, incomplete, and unsupported run diagnostics;
 - human and versioned JSON output;
 - complete display signatures and exact spelling/expansion source extents.
 
 It does not inspect built binary export tables, parse linker version scripts, exactly model
 static-archive member extraction, model non-owning factory semantics, jointly analyze multiple
-build configurations in one report, or incrementally cache translation-unit facts.
+build configurations in one report, or index translation units concurrently.
 Findings are candidates for review, not deletion instructions.
 
 ## Development status
@@ -157,7 +158,26 @@ cxx-dead build/compile_commands.json \
 
 `--frontend ast-json` remains the default. `--clang` applies only to that subprocess frontend.
 With `--verbose`, either frontend writes one `cxx-dead-index-metrics` line to standard error with
-translation-unit, AST/fact-byte, wall-time, peak-RSS, symbol, and edge counters.
+cache hit/miss and byte counters; indexing, merging, traversal, SCC, reporting, and total wall
+times; peak RSS; and graph-size counters. Runtime metrics are deliberately excluded from reports
+and graph artifacts so their deterministic output does not depend on cache warmth.
+
+Successful CLI runs cache one neutral fact batch per translation unit under
+`<project-root>/.cxx-dead/cache` by default. Override that location or disable reuse explicitly:
+
+```bash
+cxx-dead build/compile_commands.json --project-root . --cache-dir /var/cache/cxx-dead
+cxx-dead build/compile_commands.json --project-root . --no-cache
+```
+
+Each entry is keyed by the normalized compilation command, frontend/tool identity, configuration,
+fact-affecting analysis options, selected compiler environment, and response-file contents. Before
+reuse, cxx-dead hashes every compiler-reported source, generated input, system header, module, or
+PCH dependency recorded by the prior run. A source change invalidates its TU; a shared-header
+change invalidates each consuming TU. Malformed, truncated, stale, or otherwise unreadable entries
+are ignored and rebuilt. Writes are staged beside the destination and published atomically only
+after the complete index passes provider/root validation. Cache warnings never supply partial
+facts or turn an incomplete analysis into a passing run. Deleting the cache is always safe.
 
 JSON output for automation:
 
@@ -205,7 +225,8 @@ cxx-dead build/compile_commands.json \
 `--configuration-id` defaults to `default`. It participates in every stable symbol ID, so use the
 same value for comparable runs and distinct values for configurations whose declarations may
 differ. The graph artifact records symbols, typed edges, roots, escapes, source extents, identity
-quality, and diagnostics. Artifact ingestion and cache reuse are not implemented yet.
+quality, and diagnostics. Graph-artifact ingestion remains future work; incremental reuse uses an
+independently versioned internal TU-fact cache rather than treating this public artifact as storage.
 
 Additional roots and CI behavior:
 

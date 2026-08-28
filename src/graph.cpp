@@ -349,7 +349,8 @@ std::size_t graph_fact_bytes(const Graph& graph) {
     return result;
 }
 
-ReachabilityResult analyze_reachability(const Graph& graph) {
+ReachabilityResult analyze_reachability(const Graph& graph, ReachabilityMetrics& metrics) {
+    const auto traversal_started = std::chrono::steady_clock::now();
     const auto count = graph.symbols().size();
     std::vector<std::vector<SymbolId>> adjacency(count);
     std::vector<std::vector<SymbolId>> structural_adjacency(count);
@@ -393,6 +394,10 @@ ReachabilityResult analyze_reachability(const Graph& graph) {
     for (SymbolId id = 0; id < count; ++id) {
         result.provider_reachable[id] = result.reachable[id] && !result.structurally_reachable[id];
     }
+    metrics.traversal_time = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - traversal_started);
+
+    const auto scc_started = std::chrono::steady_clock::now();
 
     const auto is_candidate = [&](SymbolId id) {
         const auto& symbol = graph.symbols()[id];
@@ -457,7 +462,14 @@ ReachabilityResult analyze_reachability(const Graph& graph) {
             return lhs_location.file.string() < rhs_location.file.string();
         return lhs_location.line < rhs_location.line;
     });
+    metrics.scc_time = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - scc_started);
     return result;
+}
+
+ReachabilityResult analyze_reachability(const Graph& graph) {
+    ReachabilityMetrics metrics;
+    return analyze_reachability(graph, metrics);
 }
 
 std::string_view to_string(SymbolKind kind) {

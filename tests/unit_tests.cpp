@@ -1,4 +1,5 @@
 #include "cxx_dead/artifact.h"
+#include "cxx_dead/cache.h"
 #include "cxx_dead/compile_database.h"
 #include "cxx_dead/graph.h"
 #include "cxx_dead/indexer.h"
@@ -11,6 +12,7 @@
 #include <atomic>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <optional>
 #include <sstream>
@@ -786,6 +788,120 @@ void test_libtooling_availability_contract() {
     }
 }
 
+std::string graph_artifact(const cxx_dead::IndexResult& indexed) {
+    std::ostringstream output;
+    cxx_dead::write_graph_artifact(output, indexed.graph,
+                                   {.configuration_id = "cache-test",
+                                    .frontend = indexed.frontend,
+                                    .translation_units = indexed.translation_units},
+                                   indexed.diagnostics);
+    return output.str();
+}
+
+void test_incremental_translation_unit_cache() {
+    const auto source = std::filesystem::path(CXX_DEAD_FIXTURE_DIR);
+    const auto workspace = cxx_dead::cache_temporary_path("-cache-test");
+    struct Cleanup {
+        std::filesystem::path path;
+        ~Cleanup() {
+            std::error_code error;
+            std::filesystem::remove_all(path, error);
+        }
+    } cleanup{workspace};
+    std::filesystem::create_directories(workspace);
+    std::filesystem::copy(source, workspace,
+                          std::filesystem::copy_options::recursive |
+                              std::filesystem::copy_options::overwrite_existing);
+    const auto commands = cxx_dead::load_compilation_database(workspace / "compile_commands.json");
+    const cxx_dead::IndexOptions options{
+        .project_root = workspace,
+        .configuration_id = "cache-test",
+        .cache_directory = workspace / ".cache",
+    };
+
+    const auto cold = cxx_dead::ClangAstIndexer(options).index(commands);
+    require(cold.metrics.cache_hits == 0U && cold.metrics.cache_misses == commands.size(),
+            "cold cache run did not index every translation unit");
+    const auto expected_artifact = graph_artifact(cold);
+
+    const auto warm = cxx_dead::ClangAstIndexer(options).index(commands);
+    require(warm.metrics.cache_hits == commands.size() && warm.metrics.cache_misses == 0U &&
+                warm.ast_bytes == 0U,
+            "unchanged cache run did not reuse every translation unit");
+    require(graph_artifact(warm) == expected_artifact,
+            "warm cache run changed the deterministic graph artifact");
+
+    auto command_changed_input = commands;
+    command_changed_input.front().arguments.insert(
+        command_changed_input.front().arguments.begin() + 2, "-DCXX_DEAD_CACHE_TEST=1");
+    const auto command_changed = cxx_dead::ClangAstIndexer(options).index(command_changed_input);
+    require(command_changed.metrics.cache_hits == 1U && command_changed.metrics.cache_misses == 1U,
+            "normalized command change did not invalidate exactly its translation unit");
+    require(graph_artifact(command_changed) == expected_artifact,
+            "semantically neutral command invalidation changed graph facts");
+
+    auto output_changed_input = commands;
+    output_changed_input.front().arguments.back() = "different-output.o";
+    const auto output_changed = cxx_dead::ClangAstIndexer(options).index(output_changed_input);
+    require(output_changed.metrics.cache_hits == commands.size() &&
+                output_changed.metrics.cache_misses == 0U,
+            "non-semantic output-path change invalidated normalized command facts");
+    require(graph_artifact(output_changed) == expected_artifact,
+            "output-path normalization changed graph facts");
+
+    {
+        std::ofstream changed(workspace / "app.cpp", std::ios::app);
+        changed << "\n// cache invalidation: source changed\n";
+    }
+    const auto source_changed = cxx_dead::ClangAstIndexer(options).index(commands);
+    require(source_changed.metrics.cache_hits == 1U && source_changed.metrics.cache_misses == 1U,
+            "source change did not invalidate exactly its translation unit");
+    require(graph_artifact(source_changed) == expected_artifact,
+            "comment-only source invalidation changed graph facts");
+
+    {
+        std::ofstream changed(workspace / "shared.hpp", std::ios::app);
+        changed << "\n// cache invalidation: shared header changed\n";
+    }
+    const auto header_changed = cxx_dead::ClangAstIndexer(options).index(commands);
+    require(header_changed.metrics.cache_hits == 0U &&
+                header_changed.metrics.cache_misses == commands.size(),
+            "shared-header change did not invalidate every consuming translation unit");
+    require(graph_artifact(header_changed) == expected_artifact,
+            "comment-only header invalidation changed graph facts");
+
+    const auto cache_root = workspace / ".cache";
+    std::size_t corrupted_entries = 0;
+    for (const auto& item : std::filesystem::recursive_directory_iterator(cache_root)) {
+        if (item.is_regular_file()) {
+            std::ofstream corrupt(item.path(), std::ios::trunc);
+            corrupt << "corrupt";
+            ++corrupted_entries;
+        }
+    }
+    require(corrupted_entries != 0U, "cache run did not publish an entry");
+    const auto recovered = cxx_dead::ClangAstIndexer(options).index(commands);
+    require(recovered.metrics.cache_hits == 0U &&
+                recovered.metrics.cache_misses == commands.size() &&
+                !recovered.cache_warnings.empty(),
+            "corrupt cache entry was not safely rebuilt");
+    require(graph_artifact(recovered) == expected_artifact,
+            "cache corruption recovery changed graph facts");
+
+    const auto blocked_cache = workspace / "not-a-directory";
+    {
+        std::ofstream file(blocked_cache);
+        file << "block cache directory creation";
+    }
+    auto uncached_options = options;
+    uncached_options.cache_directory = blocked_cache;
+    const auto uncached = cxx_dead::ClangAstIndexer(uncached_options).index(commands);
+    require(uncached.metrics.cache_hits == 0U && !uncached.cache_warnings.empty(),
+            "unwritable cache path did not degrade safely to uncached indexing");
+    require(graph_artifact(uncached) == expected_artifact,
+            "cache write failure changed graph facts");
+}
+
 void test_process_limits_and_cancellation() {
     using namespace std::chrono_literals;
     const auto fixture = std::string(CXX_DEAD_PROCESS_FIXTURE);
@@ -831,6 +947,7 @@ int main() {
         test_implicit_construction_integration();
         test_callable_registration_integration();
         test_yaml_provider_integration();
+        test_incremental_translation_unit_cache();
         test_process_limits_and_cancellation();
         test_libtooling_availability_contract();
         std::cout << "all cxx-dead tests passed\n";

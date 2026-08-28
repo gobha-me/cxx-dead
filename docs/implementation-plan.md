@@ -71,7 +71,8 @@ Remaining hardening tasks:
 
 Status: v0.6.0 adds configuration-aware stable identities, Clang USR metadata, deterministic graph
 merging, and an independently versioned graph artifact on top of the v0.5.0 LibTooling prototype.
-Persistence, invalidation, and parallelism remain open.
+v0.13.0 adds versioned per-TU persistence, compiler-dependency invalidation, and stage telemetry
+for both frontends. Bounded parallelism and the million-line budget gate remain open.
 
 Goal: make application analysis viable on real repositories.
 

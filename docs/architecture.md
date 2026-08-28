@@ -155,12 +155,14 @@ the expansion extent is primary when present and spelling is primary otherwise.
 
 Clang omits repeated file and line fields in nested JSON nodes. The indexer resolves those omissions
 from traversal context and a cached per-file byte-offset line map rather than emitting line zero.
-JSON report schema version 9 separates actionable and provider-suppressed findings while retaining
-suppression provenance; version 8 added callable/provider provenance; version 7 added run state and
+JSON report schema version 10 adds public API, internal-live, and internal-unreachable classes;
+version 9 separated actionable and provider-suppressed findings while retaining suppression
+provenance; version 8 added callable/provider provenance; version 7 added run state and
 translation-unit diagnostics, while version 6 added
 analysis configuration and target context, version 5 exposed stable keys, and version 4 introduced
-spelling and expansion extents. Graph artifact schema 4 adds general provider facts and
-suppressions; schema 3 added callable registration and escape facts; schema 2 added target context.
+spelling and expansion extents. Graph artifact schema 5 adds public API roots; schema 4 added
+general provider facts and suppressions; schema 3 added callable registration and escape facts;
+schema 2 added target context.
 Identity schema 1 remains independently versioned.
 
 ## Failure model
@@ -172,10 +174,11 @@ AST JSON subprocesses run in their own process groups; a wall-time limit, output
 
 ## Run states
 
-JSON report schema 9 carries these run states and the status of every selected translation unit:
+JSON report schema 10 carries these run states and the status of every selected translation unit:
 
 - **complete**: every selected translation unit produced parseable AST facts and at least one
-  application root was found. Only a complete run may emit findings or return the policy status 2.
+  context-appropriate root was found. Only a complete run may emit findings or return policy status
+  2.
 - **incomplete**: a supported analysis started, but a required translation unit, AST document, or
   root could not be indexed. The partial graph is discarded, no findings are emitted, and the
   process returns status 1.

@@ -41,6 +41,7 @@ enum class RootKind {
     Manual,
     CallbackRegistration,
     Provider,
+    PublicApi,
 };
 
 enum class EscapeKind {
@@ -180,6 +181,7 @@ struct ReachabilityResult {
 [[nodiscard]] bool is_traversable(EdgeKind kind);
 [[nodiscard]] bool is_provider(EdgeKind kind);
 [[nodiscard]] bool is_provider(RootKind kind);
+[[nodiscard]] bool is_public_api(RootKind kind);
 [[nodiscard]] bool has_indexed_body(SymbolScope scope);
 [[nodiscard]] bool is_reportable(SymbolScope scope);
 [[nodiscard]] const SourceExtent& primary_source_extent(const Symbol& symbol);

@@ -1,0 +1,6 @@
+schema_version: 1
+provider: invalid_old_schema
+public_api_roots:
+  - symbol:
+      qualified_name: provider_fixture::ordinary_dead
+    reason: not valid in schema one

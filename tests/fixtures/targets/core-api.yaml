@@ -1,0 +1,6 @@
+schema_version: 2
+provider: core_sdk
+public_api_roots:
+  - symbol:
+      qualified_name: core::production_api
+    reason: supported static-library entry point

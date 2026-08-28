@@ -286,7 +286,7 @@ void test_clang_integration() {
     const auto report_json = cxx_dead::json::parse(json_output.str());
     require(report_json.find("findings") != nullptr, "JSON report has no findings field");
     require(report_json.find("schema_version") != nullptr &&
-                report_json.find("schema_version")->as_number() == 9.0,
+                report_json.find("schema_version")->as_number() == 10.0,
             "JSON report does not use provider schema version 9");
     require(report_json.find("roots") != nullptr && report_json.find("roots")->is_array(),
             "JSON report has no structured roots field");
@@ -302,7 +302,7 @@ void test_clang_integration() {
                                    indexed.diagnostics);
     const auto artifact_json = cxx_dead::json::parse(artifact_output.str());
     require(artifact_json.find("artifact_schema_version") != nullptr &&
-                artifact_json.find("artifact_schema_version")->as_number() == 4.0 &&
+                artifact_json.find("artifact_schema_version")->as_number() == 5.0 &&
                 artifact_json.find("identity_schema_version") != nullptr &&
                 artifact_json.find("identity_schema_version")->as_number() == 1.0,
             "graph artifact schema versions are missing or coupled to the report schema");
@@ -567,7 +567,7 @@ void test_callable_registration_integration() {
                                     .translation_units = indexed.translation_units},
                                    indexed.diagnostics);
     const auto artifact = cxx_dead::json::parse(artifact_output.str());
-    require(artifact.find("artifact_schema_version")->as_number() == 4.0 &&
+    require(artifact.find("artifact_schema_version")->as_number() == 5.0 &&
                 std::ranges::any_of(artifact.find("edges")->as_array(),
                                     [](const auto& edge) {
                                         return edge.string_or("kind") == "callback_registration";
@@ -617,11 +617,15 @@ void test_yaml_provider_integration() {
                 policy.edges.size() == 1U && policy.escapes.size() == 1U &&
                 policy.suppressions.size() == 1U && policy.callback_registrations.size() == 1U,
             "YAML provider did not load every typed fact");
+    const auto public_policy = cxx_dead::load_provider_config(fixture / "public-api.yaml");
+    require(public_policy.public_api_roots.size() == 1U,
+            "provider v2 did not load public API roots");
 
     for (const auto& [file, expected] : std::vector<std::pair<std::string, std::string>>{
              {"invalid-unknown.yaml", "unknown key"},
              {"invalid-selector.yaml", "exactly one"},
              {"invalid-duplicate.yaml", "duplicate key"},
+             {"invalid-public-api-v1.yaml", "requires schema_version 2"},
          }) {
         try {
             static_cast<void>(cxx_dead::load_provider_config(fixture / file));
@@ -680,7 +684,7 @@ void test_yaml_provider_integration() {
     cxx_dead::write_json_report(report_output, indexed.graph, reachability, report,
                                 indexed.diagnostics);
     const auto report_json = cxx_dead::json::parse(report_output.str());
-    require(report_json.find("schema_version")->as_number() == 9.0 &&
+    require(report_json.find("schema_version")->as_number() == 10.0 &&
                 report_json.find("suppressed_findings")->as_array().size() == 1U &&
                 report_json.find("summary")->find("suppressed_symbols")->as_number() == 1.0,
             "provider report schema omitted auditable suppressions");
@@ -692,9 +696,16 @@ void test_yaml_provider_integration() {
                                     .translation_units = indexed.translation_units},
                                    indexed.diagnostics);
     const auto artifact = cxx_dead::json::parse(artifact_output.str());
-    require(artifact.find("artifact_schema_version")->as_number() == 4.0 &&
+    require(artifact.find("artifact_schema_version")->as_number() == 5.0 &&
                 artifact.find("suppressions")->as_array().size() == 1U,
             "graph artifact omitted provider suppressions");
+
+    auto public_graph = indexed.graph;
+    cxx_dead::apply_provider_policies(public_graph, {public_policy});
+    const auto public_report =
+        cxx_dead::build_report(public_graph, cxx_dead::analyze_reachability(public_graph));
+    require(public_report.public_api_symbols == 1U && public_report.public_api.size() == 1U,
+            "explicit public API root was not reported separately");
 
     for (const auto& [file, expected] : std::vector<std::pair<std::string, std::string>>{
              {"ambiguous.yaml", "matched 2 symbols"},

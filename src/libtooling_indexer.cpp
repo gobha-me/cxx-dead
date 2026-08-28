@@ -55,6 +55,15 @@ bool path_is_within(const std::filesystem::path& child, const std::filesystem::p
     return first != ".." && !relative.is_absolute();
 }
 
+bool contains_path(const std::vector<std::filesystem::path>& paths,
+                   const std::filesystem::path& path) {
+    return std::ranges::find(paths, path) != paths.end();
+}
+
+std::string public_header_reason(const std::filesystem::path& path) {
+    return "declaration in public header " + path.generic_string();
+}
+
 std::string identity_path(const std::filesystem::path& path,
                           const std::filesystem::path& project_root) {
     if (path.empty())
@@ -177,6 +186,17 @@ class TranslationUnitCollector {
             .is_virtual = llvm::isa<clang::CXXMethodDecl>(declaration) &&
                           llvm::cast<clang::CXXMethodDecl>(declaration)->isVirtual(),
         });
+        if (!internal && contains_path(options_.public_headers, file)) {
+            graph_.add_root(id, RootKind::PublicApi,
+                            {.provider = "library_api", .reason = public_header_reason(file)});
+        }
+        if (!internal && options_.infer_shared_library_exports && has_body &&
+            contains_path(options_.selected_target_sources, command_.file) &&
+            declaration->getVisibility() != clang::HiddenVisibility) {
+            graph_.add_root(id, RootKind::PublicApi,
+                            {.provider = "library_api",
+                             .reason = "external definition has effective exported visibility"});
+        }
         if (declaration->getNameAsString() == "main" && graph_.symbols()[id].defined) {
             graph_.add_root(
                 id, RootKind::ApplicationEntryPoint,
@@ -577,7 +597,8 @@ class UseVisitor : public clang::RecursiveASTVisitor<UseVisitor> {
                                          ":" + std::to_string(rule.argument_index) +
                                          " exceeds the registrar argument list");
             }
-            const auto callbacks = callable_targets(expression->getArg(rule.argument_index));
+            const auto callbacks =
+                callable_targets(expression->getArg(static_cast<unsigned>(rule.argument_index)));
             if (callbacks.empty()) {
                 throw std::runtime_error("callback registration rule " + describe(rule.callee) +
                                          ":" + std::to_string(rule.argument_index) +
@@ -836,13 +857,34 @@ LibToolingIndexer::LibToolingIndexer(IndexOptions options) : options_(std::move(
     }
     for (auto& excluded : options_.excluded_paths)
         excluded = std::filesystem::absolute(excluded).lexically_normal();
+    for (auto& source : options_.selected_target_sources)
+        source = std::filesystem::absolute(source).lexically_normal();
+    for (auto& header : options_.public_headers)
+        header = std::filesystem::absolute(header).lexically_normal();
 }
 
 IndexResult LibToolingIndexer::index(const std::vector<CompileCommand>& commands) const {
-    if (commands.empty())
-        throw std::runtime_error("compilation database contains no commands");
     IndexResult result;
     result.frontend = IndexFrontend::LibTooling;
+    const auto has_explicit_api_roots =
+        std::ranges::any_of(options_.provider_policies, [](const ProviderPolicy& policy) {
+            return !policy.public_api_roots.empty();
+        });
+    if (options_.require_library_api_policy && options_.public_headers.empty() &&
+        !has_explicit_api_roots) {
+        throw IndexingError("selected library requires public headers or explicit public API roots",
+                            {.state = RunState::Incomplete,
+                             .frontend = result.frontend,
+                             .partial_graph_discarded = false,
+                             .translation_units = {}});
+    }
+    if (commands.empty()) {
+        throw IndexingError("selected interface library has no compilation context",
+                            {.state = RunState::Incomplete,
+                             .frontend = result.frontend,
+                             .partial_graph_discarded = false,
+                             .translation_units = {}});
+    }
     std::vector<bool> registration_rule_matches(options_.callback_registration_rules.size(), false);
     if (options_.translation_unit_timeout.count() > 0 || options_.index_timeout.count() > 0 ||
         options_.max_ast_bytes != 0) {
@@ -1002,6 +1044,20 @@ IndexResult LibToolingIndexer::index(const std::vector<CompileCommand>& commands
                              .frontend = result.frontend,
                              .partial_graph_discarded = true,
                              .translation_units = result.translation_unit_diagnostics});
+    }
+    for (const auto& header : options_.public_headers) {
+        const auto reason = public_header_reason(header);
+        if (!std::ranges::any_of(result.graph.roots(), [&](const Root& root) {
+                return is_public_api(root.kind) && root.evidence.reason == reason;
+            })) {
+            throw IndexingError(
+                "declared public header was not observed in indexed translation units: " +
+                    header.string(),
+                {.state = RunState::Incomplete,
+                 .frontend = result.frontend,
+                 .partial_graph_discarded = true,
+                 .translation_units = result.translation_unit_diagnostics});
+        }
     }
     if (!options_.ast_filter.empty())
         result.diagnostics.push_back("Clang AST name filter active: " + options_.ast_filter);

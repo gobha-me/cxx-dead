@@ -115,7 +115,7 @@ ProviderPolicy load_provider_config(const std::filesystem::path& path) {
     }
     require_mapping(root,
                     {"schema_version", "provider", "roots", "edges", "escapes", "suppressions",
-                     "callback_registrations"},
+                     "callback_registrations", "public_api_roots"},
                     path, "document");
     const auto version_node = require_node(root, "schema_version", path, "document");
     int version = 0;
@@ -124,7 +124,7 @@ ProviderPolicy load_provider_config(const std::filesystem::path& path) {
     } catch (const YAML::Exception&) {
         throw std::runtime_error(path.string() + ": schema_version must be an integer");
     }
-    if (version != provider_config_schema_version) {
+    if (version != 1 && version != provider_config_schema_version) {
         throw std::runtime_error(path.string() + ": unsupported provider schema_version " +
                                  std::to_string(version));
     }
@@ -132,6 +132,9 @@ ProviderPolicy load_provider_config(const std::filesystem::path& path) {
     ProviderPolicy policy;
     policy.source = std::filesystem::absolute(path).lexically_normal();
     policy.provider = require_string(root, "provider", path, "document");
+
+    if (version == 1 && root["public_api_roots"])
+        throw std::runtime_error(path.string() + ": public_api_roots requires schema_version 2");
 
     parse_sequence(root, "roots", path, [&](const YAML::Node& item, const std::string& context) {
         require_mapping(item, {"symbol", "reason"}, path, context);
@@ -141,6 +144,15 @@ ProviderPolicy load_provider_config(const std::filesystem::path& path) {
             .evidence = parse_evidence(item, policy.provider, path, context),
         });
     });
+    parse_sequence(root, "public_api_roots", path,
+                   [&](const YAML::Node& item, const std::string& context) {
+                       require_mapping(item, {"symbol", "reason"}, path, context);
+                       policy.public_api_roots.push_back({
+                           .symbol = parse_selector(require_node(item, "symbol", path, context),
+                                                    path, context + ".symbol"),
+                           .evidence = parse_evidence(item, policy.provider, path, context),
+                       });
+                   });
     parse_sequence(root, "edges", path, [&](const YAML::Node& item, const std::string& context) {
         require_mapping(item, {"from", "to", "reason"}, path, context);
         policy.edges.push_back({
@@ -252,6 +264,10 @@ void apply_provider_policies(Graph& graph, const std::vector<ProviderPolicy>& po
         for (const auto& fact : policy.roots) {
             graph.add_root(resolve_unique(graph, fact.symbol, source + ": root"),
                            RootKind::Provider, fact.evidence);
+        }
+        for (const auto& fact : policy.public_api_roots) {
+            graph.add_root(resolve_unique(graph, fact.symbol, source + ": public_api_root"),
+                           RootKind::PublicApi, fact.evidence);
         }
         for (const auto& fact : policy.edges) {
             graph.add_edge(resolve_unique(graph, fact.from, source + ": edge.from"),

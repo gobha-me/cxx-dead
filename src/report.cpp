@@ -199,6 +199,20 @@ void write_json_run(std::ostream& output, const RunDiagnostics& run) {
 
 AnalysisReport build_report(const Graph& graph, const ReachabilityResult& result) {
     AnalysisReport report;
+    std::vector<bool> public_api_root(graph.symbols().size(), false);
+    for (const auto& root : graph.roots()) {
+        if (!is_public_api(root.kind))
+            continue;
+        public_api_root[root.symbol] = true;
+        const auto& symbol = graph.symbols()[root.symbol];
+        if (is_reportable(symbol.scope)) {
+            report.public_api.push_back({
+                .symbol = root.symbol,
+                .from = std::nullopt,
+                .evidence = root.evidence,
+            });
+        }
+    }
     for (SymbolId id = 0; id < graph.symbols().size(); ++id) {
         const auto& symbol = graph.symbols()[id];
         switch (symbol.scope) {
@@ -217,14 +231,19 @@ AnalysisReport build_report(const Graph& graph, const ReachabilityResult& result
         if (!symbol.defined || !is_reportable(symbol.scope) || symbol.kind == SymbolKind::Synthetic)
             continue;
         ++report.defined_symbols;
+        if (public_api_root[id])
+            ++report.public_api_symbols;
         if (result.reachable[id]) {
             ++report.reachable_symbols;
+            if (!public_api_root[id])
+                ++report.internal_live_symbols;
             if (result.provider_reachable[id])
                 ++report.provider_reachable_symbols;
             else
                 ++report.structurally_reachable_symbols;
         } else {
             ++report.unreachable_symbols;
+            ++report.internal_unreachable_symbols;
             auto finding = classify(graph, id, symbol);
             std::vector<Evidence> suppressions;
             for (const auto& suppression : graph.suppressions()) {
@@ -281,6 +300,17 @@ AnalysisReport build_report(const Graph& graph, const ReachabilityResult& result
             return std::tuple{item.symbol, item.from, item.evidence.provider, item.evidence.reason};
         });
     report.provider_reachable.erase(provider_duplicate.begin(), provider_duplicate.end());
+    std::ranges::sort(report.public_api, [&](const auto& left, const auto& right) {
+        return std::tuple{graph.symbols()[left.symbol].key, left.evidence.provider,
+                          left.evidence.reason} < std::tuple{graph.symbols()[right.symbol].key,
+                                                             right.evidence.provider,
+                                                             right.evidence.reason};
+    });
+    const auto public_duplicate =
+        std::ranges::unique(report.public_api, {}, [](const ProviderReachability& item) {
+            return std::tuple{item.symbol, item.evidence.provider, item.evidence.reason};
+        });
+    report.public_api.erase(public_duplicate.begin(), report.public_api.end());
     std::ranges::sort(report.findings, [&](const Finding& left, const Finding& right) {
         const auto& lhs = graph.symbols()[left.symbol];
         const auto& rhs = graph.symbols()[right.symbol];
@@ -366,7 +396,10 @@ void write_human_report(std::ostream& output, const Graph& graph,
            << report.provider_reachable_symbols << " provider)\n"
            << "  Unreachable candidates:    " << report.unreachable_symbols << " ("
            << report.actionable_unreachable_symbols << " actionable, " << report.suppressed_symbols
-           << " suppressed)\n\n";
+           << " suppressed)\n"
+           << "  Library classes:           " << report.public_api_symbols << " public API, "
+           << report.internal_live_symbols << " internal live, "
+           << report.internal_unreachable_symbols << " internal unreachable\n\n";
 
     output << "ROOTS\n";
     for (const auto& root : graph.roots()) {
@@ -377,6 +410,17 @@ void write_human_report(std::ostream& output, const Graph& graph,
                << '\n';
     }
     output << '\n';
+
+    if (!report.public_api.empty()) {
+        output << "PUBLIC API\n";
+        for (const auto& retained : report.public_api) {
+            const auto& symbol = graph.symbols()[retained.symbol];
+            output << "  " << display_symbol(symbol) << " [externally_reachable]\n"
+                   << "    Evidence: " << retained.evidence.provider << ": "
+                   << retained.evidence.reason << '\n';
+        }
+        output << '\n';
+    }
 
     if (!report.provider_reachable.empty()) {
         output << "PROVIDER-REACHABLE SYMBOLS\n";
@@ -581,6 +625,10 @@ void write_json_report(std::ostream& output, const Graph& graph,
            << "    \"structurally_reachable_symbols\": " << report.structurally_reachable_symbols
            << ",\n"
            << "    \"provider_reachable_symbols\": " << report.provider_reachable_symbols << ",\n"
+           << "    \"public_api_symbols\": " << report.public_api_symbols << ",\n"
+           << "    \"internal_live_symbols\": " << report.internal_live_symbols << ",\n"
+           << "    \"internal_unreachable_symbols\": " << report.internal_unreachable_symbols
+           << ",\n"
            << "    \"unreachable_symbols\": " << report.unreachable_symbols << ",\n"
            << "    \"actionable_unreachable_symbols\": " << report.actionable_unreachable_symbols
            << ",\n"
@@ -611,6 +659,23 @@ void write_json_report(std::ostream& output, const Graph& graph,
                << "    }";
     }
     if (!graph.roots().empty())
+        output << '\n';
+    output << "  ],\n"
+           << "  \"public_api\": [";
+    for (std::size_t index = 0; index < report.public_api.size(); ++index) {
+        const auto& retained = report.public_api[index];
+        const auto& symbol = graph.symbols()[retained.symbol];
+        output << (index == 0 ? "\n" : ",\n") << "    {\n"
+               << "      \"symbol\": \"" << json::escape(symbol.qualified_name) << "\",\n"
+               << "      \"signature\": \"" << json::escape(symbol.signature) << "\",\n"
+               << "      \"key\": \"" << json::escape(symbol.key) << "\",\n"
+               << "      \"classification\": \"externally_reachable\",\n"
+               << "      \"evidence\": {\"provider\": \""
+               << json::escape(retained.evidence.provider) << "\", \"reason\": \""
+               << json::escape(retained.evidence.reason) << "\"}\n"
+               << "    }";
+    }
+    if (!report.public_api.empty())
         output << '\n';
     output << "  ],\n"
            << "  \"provider_reachable\": [";

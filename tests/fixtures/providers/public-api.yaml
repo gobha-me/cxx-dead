@@ -1,0 +1,6 @@
+schema_version: 2
+provider: library_contract
+public_api_roots:
+  - symbol:
+      qualified_name: provider_fixture::ordinary_dead
+    reason: declared external SDK entry point

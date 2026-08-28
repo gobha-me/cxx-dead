@@ -250,6 +250,40 @@ bool path_is_within(const std::filesystem::path& child, const std::filesystem::p
     return first != ".." && !relative.is_absolute();
 }
 
+bool contains_path(const std::vector<std::filesystem::path>& paths,
+                   const std::filesystem::path& path) {
+    return std::ranges::find(paths, path) != paths.end();
+}
+
+std::string public_header_reason(const std::filesystem::path& path) {
+    return "declaration in public header " + path.generic_string();
+}
+
+std::optional<std::string> explicit_visibility(const Value& node) {
+    for (const auto& child : children(node)) {
+        if (child.string_or("kind") == "VisibilityAttr")
+            return child.string_or("visibility");
+    }
+    return std::nullopt;
+}
+
+bool command_has_hidden_default_visibility(const CompileCommand& command) {
+    bool hidden = false;
+    for (const auto& argument : command.arguments) {
+        if (argument == "-fvisibility=hidden")
+            hidden = true;
+        else if (argument == "-fvisibility=default" || argument == "-fvisibility=protected")
+            hidden = false;
+    }
+    return hidden;
+}
+
+bool is_export_visible(const Value& node, const CompileCommand& command) {
+    if (const auto visibility = explicit_visibility(node); visibility.has_value())
+        return *visibility == "default" || *visibility == "protected";
+    return !command_has_hidden_default_visibility(command);
+}
+
 std::string identity_path(const std::filesystem::path& path,
                           const std::filesystem::path& project_root) {
     if (path.empty())
@@ -488,6 +522,19 @@ void collect_declarations(const Value& node, TranslationUnitState& state, std::s
             } else {
                 const auto symbol_id = state.graph.add_or_merge_symbol(std::move(symbol));
                 state.declarations[ast_id] = symbol_id;
+                if (!internal && contains_path(state.options.public_headers, file)) {
+                    state.graph.add_root(
+                        symbol_id, RootKind::PublicApi,
+                        {.provider = "library_api", .reason = public_header_reason(file)});
+                }
+                if (!internal && state.options.infer_shared_library_exports && has_body(node) &&
+                    contains_path(state.options.selected_target_sources, state.command.file) &&
+                    is_export_visible(node, state.command)) {
+                    state.graph.add_root(
+                        symbol_id, RootKind::PublicApi,
+                        {.provider = "library_api",
+                         .reason = "external definition has effective exported visibility"});
+                }
                 if (name == "main" && has_body(node)) {
                     state.graph.add_root(
                         symbol_id, RootKind::ApplicationEntryPoint,
@@ -1086,13 +1133,34 @@ ClangAstIndexer::ClangAstIndexer(IndexOptions options) : options_(std::move(opti
     }
     for (auto& excluded : options_.excluded_paths)
         excluded = std::filesystem::absolute(excluded).lexically_normal();
+    for (auto& source : options_.selected_target_sources)
+        source = std::filesystem::absolute(source).lexically_normal();
+    for (auto& header : options_.public_headers)
+        header = std::filesystem::absolute(header).lexically_normal();
 }
 
 IndexResult ClangAstIndexer::index(const std::vector<CompileCommand>& commands) const {
-    if (commands.empty())
-        throw std::runtime_error("compilation database contains no commands");
     IndexResult result;
     result.frontend = IndexFrontend::AstJson;
+    const auto has_explicit_api_roots =
+        std::ranges::any_of(options_.provider_policies, [](const ProviderPolicy& policy) {
+            return !policy.public_api_roots.empty();
+        });
+    if (options_.require_library_api_policy && options_.public_headers.empty() &&
+        !has_explicit_api_roots) {
+        throw IndexingError("selected library requires public headers or explicit public API roots",
+                            {.state = RunState::Incomplete,
+                             .frontend = result.frontend,
+                             .partial_graph_discarded = false,
+                             .translation_units = {}});
+    }
+    if (commands.empty()) {
+        throw IndexingError("selected interface library has no compilation context",
+                            {.state = RunState::Incomplete,
+                             .frontend = result.frontend,
+                             .partial_graph_discarded = false,
+                             .translation_units = {}});
+    }
     std::unordered_map<std::string, RecordInfo> records;
     std::vector<bool> registration_rule_matches(options_.callback_registration_rules.size(), false);
     const auto index_started = std::chrono::steady_clock::now();
@@ -1278,6 +1346,20 @@ IndexResult ClangAstIndexer::index(const std::vector<CompileCommand>& commands) 
                              .frontend = result.frontend,
                              .partial_graph_discarded = true,
                              .translation_units = result.translation_unit_diagnostics});
+    }
+    for (const auto& header : options_.public_headers) {
+        const auto reason = public_header_reason(header);
+        if (!std::ranges::any_of(result.graph.roots(), [&](const Root& root) {
+                return is_public_api(root.kind) && root.evidence.reason == reason;
+            })) {
+            throw IndexingError(
+                "declared public header was not observed in indexed translation units: " +
+                    header.string(),
+                {.state = RunState::Incomplete,
+                 .frontend = result.frontend,
+                 .partial_graph_discarded = true,
+                 .translation_units = result.translation_unit_diagnostics});
+        }
     }
     if (!options_.ast_filter.empty())
         result.diagnostics.push_back("Clang AST name filter active: " + options_.ast_filter);

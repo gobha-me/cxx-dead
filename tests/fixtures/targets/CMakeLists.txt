@@ -10,6 +10,11 @@ add_library(core STATIC core.cpp)
 target_sources(core PRIVATE $<TARGET_OBJECTS:objects>)
 
 add_library(shared SHARED shared.cpp)
+target_sources(shared PUBLIC FILE_SET HEADERS FILES shared.hpp)
+target_compile_options(shared PRIVATE -fvisibility=hidden)
+
+add_library(header_only INTERFACE)
+target_sources(header_only INTERFACE FILE_SET HEADERS FILES header_only.hpp)
 
 add_executable(production_app production.cpp)
 target_link_libraries(production_app PRIVATE core shared)

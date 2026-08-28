@@ -134,6 +134,20 @@ BuildTarget parse_cmake_target(const std::filesystem::path& target_file,
     result.name = require_string(document, "name", "CMake target");
     result.kind = parse_target_kind(require_string(document, "type", "CMake target"));
 
+    std::set<std::size_t> public_header_file_sets;
+    if (const auto* file_sets = document.find("fileSets"); file_sets != nullptr) {
+        if (!file_sets->is_array())
+            throw std::runtime_error("CMake target fileSets must be an array");
+        for (std::size_t index = 0; index < file_sets->as_array().size(); ++index) {
+            const auto& file_set = file_sets->as_array()[index];
+            const auto visibility = file_set.string_or("visibility");
+            if (file_set.string_or("type") == "HEADERS" &&
+                (visibility == "PUBLIC" || visibility == "INTERFACE")) {
+                public_header_file_sets.insert(index);
+            }
+        }
+    }
+
     std::set<std::size_t> cxx_compile_groups;
     if (const auto* groups = document.find("compileGroups"); groups != nullptr) {
         if (!groups->is_array())
@@ -148,6 +162,12 @@ BuildTarget parse_cmake_target(const std::filesystem::path& target_file,
         if (!sources->is_array())
             throw std::runtime_error("CMake target sources must be an array");
         for (const auto& source : sources->as_array()) {
+            if (const auto* file_set = source.find("fileSetIndex");
+                file_set != nullptr &&
+                public_header_file_sets.contains(require_index(*file_set, "fileSetIndex"))) {
+                result.public_headers.push_back(normalized_path(
+                    require_string(source, "path", "CMake target source"), source_root));
+            }
             const auto* group = source.find("compileGroupIndex");
             if (group == nullptr || !group->is_number())
                 continue;
@@ -179,6 +199,9 @@ BuildTarget parse_cmake_target(const std::filesystem::path& target_file,
     std::ranges::sort(result.dependencies);
     result.dependencies.erase(std::ranges::unique(result.dependencies).begin(),
                               result.dependencies.end());
+    std::ranges::sort(result.public_headers);
+    result.public_headers.erase(std::ranges::unique(result.public_headers).begin(),
+                                result.public_headers.end());
     return result;
 }
 
@@ -339,8 +362,9 @@ BuildModel load_target_manifest(const std::filesystem::path& manifest) {
     const auto manifest_path = std::filesystem::absolute(manifest).lexically_normal();
     const auto document = read_json(manifest_path);
     const auto& schema = require_member(document, "schema_version", "target manifest");
-    if (!schema.is_number() || schema.as_number() != 1.0)
-        throw std::runtime_error("target manifest schema_version must be 1");
+    if (!schema.is_number() || (schema.as_number() != 1.0 && schema.as_number() != 2.0))
+        throw std::runtime_error("target manifest schema_version must be 1 or 2");
+    const auto schema_version = static_cast<int>(schema.as_number());
     BuildModel result;
     result.source_root = normalized_path(require_string(document, "source_root", "target manifest"),
                                          manifest_path.parent_path());
@@ -382,6 +406,23 @@ BuildModel load_target_manifest(const std::filesystem::path& manifest) {
                         normalized_path(artifact.as_string(), result.build_root));
                 }
             }
+            if (const auto* public_headers = target_value.find("public_headers");
+                public_headers != nullptr) {
+                if (schema_version < 2)
+                    throw std::runtime_error(
+                        "manifest target public_headers requires schema_version 2");
+                if (!public_headers->is_array())
+                    throw std::runtime_error("manifest target public_headers must be an array");
+                for (const auto& header : public_headers->as_array()) {
+                    if (!header.is_string() || header.as_string().empty())
+                        throw std::runtime_error("manifest public header must be a string");
+                    target.public_headers.push_back(
+                        normalized_path(header.as_string(), result.source_root));
+                }
+                std::ranges::sort(target.public_headers);
+                target.public_headers.erase(std::ranges::unique(target.public_headers).begin(),
+                                            target.public_headers.end());
+            }
             configuration.targets.push_back(std::move(target));
         }
         result.configurations.push_back(std::move(configuration));
@@ -410,6 +451,8 @@ TargetSelection select_target_commands(const BuildModel& model, std::string_view
     result.context.target_id = selected_target.id;
     result.context.target_name = selected_target.name;
     result.context.target_kind = selected_target.kind;
+    result.context.selected_sources = selected_target.sources;
+    result.context.public_headers = selected_target.public_headers;
 
     std::vector<const BuildTarget*> closure;
     std::set<std::string, std::less<>> visited;
@@ -479,7 +522,7 @@ TargetSelection select_target_commands(const BuildModel& model, std::string_view
     }
     for (const auto index : selected_indexes)
         result.commands.push_back(commands[index]);
-    if (result.commands.empty())
+    if (result.commands.empty() && selected_target.kind != BuildTargetKind::InterfaceLibrary)
         throw std::runtime_error("selected target closure contains no C++ compilation commands");
     std::ranges::sort(result.diagnostics);
     return result;

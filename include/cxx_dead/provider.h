@@ -10,7 +10,7 @@
 
 namespace cxx_dead {
 
-inline constexpr int provider_config_schema_version = 1;
+inline constexpr int provider_config_schema_version = 2;
 
 struct SymbolSelector {
     std::string id;
@@ -59,6 +59,7 @@ struct ProviderPolicy {
     std::filesystem::path source;
     std::string provider;
     std::vector<ProviderRootFact> roots;
+    std::vector<ProviderRootFact> public_api_roots;
     std::vector<ProviderEdgeFact> edges;
     std::vector<ProviderEscapeFact> escapes;
     std::vector<ProviderSuppressionFact> suppressions;

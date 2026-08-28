@@ -10,7 +10,7 @@
 
 namespace cxx_dead {
 
-inline constexpr int report_schema_version = 9;
+inline constexpr int report_schema_version = 10;
 
 struct AnalysisMetadata {
     std::string mode{"application"};
@@ -74,6 +74,10 @@ struct AnalysisReport {
     std::size_t unreachable_symbols{0};
     std::size_t actionable_unreachable_symbols{0};
     std::size_t suppressed_symbols{0};
+    std::size_t public_api_symbols{0};
+    std::size_t internal_live_symbols{0};
+    std::size_t internal_unreachable_symbols{0};
+    std::vector<ProviderReachability> public_api;
     std::vector<ProviderReachability> provider_reachable;
     std::vector<SuppressedFinding> suppressed_findings;
 };

@@ -231,6 +231,10 @@ bool is_provider(RootKind kind) {
     return kind == RootKind::CallbackRegistration || kind == RootKind::Provider;
 }
 
+bool is_public_api(RootKind kind) {
+    return kind == RootKind::PublicApi;
+}
+
 bool has_indexed_body(SymbolScope scope) {
     return scope == SymbolScope::Reportable || scope == SymbolScope::Indexed;
 }
@@ -514,6 +518,8 @@ std::string_view to_string(RootKind kind) {
         return "callback_registration";
     case RootKind::Provider:
         return "provider";
+    case RootKind::PublicApi:
+        return "public_api";
     }
     return "unknown";
 }

@@ -125,7 +125,7 @@ CliOptions parse_cli(int count, char** arguments) {
             std::exit(0);
         }
         if (argument == "--version") {
-            std::cout << "cxx-dead 0.11.0\n";
+            std::cout << "cxx-dead 0.12.0\n";
             std::exit(0);
         }
         if (argument == "--compile-commands") {
@@ -330,6 +330,27 @@ int main(int argc, char** argv) {
             if (commands.empty())
                 throw std::runtime_error("--tu-root excluded every compilation command");
         }
+        const auto has_public_api_roots =
+            std::ranges::any_of(provider_policies, [](const cxx_dead::ProviderPolicy& policy) {
+                return !policy.public_api_roots.empty();
+            });
+        const auto library_target =
+            target_selection.has_value() &&
+            target_selection->context.target_kind != cxx_dead::BuildTargetKind::Executable &&
+            target_selection->context.target_kind != cxx_dead::BuildTargetKind::ObjectLibrary &&
+            target_selection->context.target_kind != cxx_dead::BuildTargetKind::Utility;
+        if (has_public_api_roots && !library_target) {
+            throw std::runtime_error(
+                "public_api_roots require a selected static, shared, module, or interface library");
+        }
+        const auto infer_shared_library_exports =
+            target_selection.has_value() &&
+            (target_selection->context.target_kind == cxx_dead::BuildTargetKind::SharedLibrary ||
+             target_selection->context.target_kind == cxx_dead::BuildTargetKind::ModuleLibrary);
+        const auto require_library_api_policy =
+            target_selection.has_value() &&
+            (target_selection->context.target_kind == cxx_dead::BuildTargetKind::StaticLibrary ||
+             target_selection->context.target_kind == cxx_dead::BuildTargetKind::InterfaceLibrary);
         const cxx_dead::IndexOptions index_options{
             .project_root = options.project_root,
             .configuration_id = options.configuration_id,
@@ -340,11 +361,19 @@ int main(int argc, char** argv) {
             .manual_roots = options.roots,
             .callback_registration_rules = options.callback_registration_rules,
             .provider_policies = provider_policies,
+            .selected_target_sources = target_selection.has_value()
+                                           ? target_selection->context.selected_sources
+                                           : std::vector<std::filesystem::path>{},
+            .public_headers = target_selection.has_value()
+                                  ? target_selection->context.public_headers
+                                  : std::vector<std::filesystem::path>{},
             .translation_unit_timeout = options.translation_unit_timeout,
             .index_timeout = options.index_timeout,
             .max_ast_bytes = options.max_ast_bytes,
             .cancellation_requested = [] { return cancellation_signal != 0; },
             .verbose = options.verbose,
+            .infer_shared_library_exports = infer_shared_library_exports,
+            .require_library_api_policy = require_library_api_policy,
         };
         cxx_dead::AnalysisMetadata report_metadata{
             .mode = target_selection.has_value() ? "target" : "application",

@@ -184,7 +184,7 @@ int main() {
                                     production_report, production.diagnostics, metadata);
         const auto report_json = cxx_dead::json::parse(report_output.str());
         const auto* context = report_json.find("analysis_context");
-        require(report_json.find("schema_version")->as_number() == 9.0 && context != nullptr &&
+        require(report_json.find("schema_version")->as_number() == 10.0 && context != nullptr &&
                     context->string_or("target_name") == "production_app" &&
                     context->string_or("configuration_id") == "Debug",
                 "target report omitted versioned analysis context");
@@ -201,7 +201,7 @@ int main() {
              .translation_units = production.commands.size()},
             production.diagnostics);
         const auto artifact_json = cxx_dead::json::parse(artifact_output.str());
-        require(artifact_json.find("artifact_schema_version")->as_number() == 4.0 &&
+        require(artifact_json.find("artifact_schema_version")->as_number() == 5.0 &&
                     artifact_json.find("analysis_context") != nullptr,
                 "graph artifact omitted target analysis context");
 
@@ -220,6 +220,84 @@ int main() {
                 "manifest fallback selected a different production closure");
         require(manifest_selection.context.closure_targets == production.context.closure_targets,
                 "manifest fallback produced a different target closure");
+
+        const auto shared =
+            cxx_dead::select_target_commands(cmake_model, "Debug", "shared", commands);
+        require(shared.context.public_headers.size() == 1U &&
+                    shared.context.public_headers.front().filename() == "shared.hpp",
+                "CMake public header file set was not retained");
+        const cxx_dead::IndexOptions shared_options{
+            .project_root = source_root,
+            .configuration_id = shared.context.configuration,
+            .selected_target_sources = shared.context.selected_sources,
+            .public_headers = shared.context.public_headers,
+            .infer_shared_library_exports = true,
+        };
+        const auto shared_indexed =
+            cxx_dead::ClangAstIndexer(shared_options).index(shared.commands);
+        const auto shared_reachability = cxx_dead::analyze_reachability(shared_indexed.graph);
+        const auto shared_report =
+            cxx_dead::build_report(shared_indexed.graph, shared_reachability);
+        require(
+            shared_report.public_api_symbols == 3U &&
+                !has_finding(shared_indexed.graph, shared_report, "shared::unused_shared_api") &&
+                !has_finding(shared_indexed.graph, shared_report, "shared::export_only_api") &&
+                has_finding(shared_indexed.graph, shared_report, "shared::hidden_implementation") &&
+                has_finding(shared_indexed.graph, shared_report, "shared::private_header_helper"),
+            "library public API policy did not separate exported API from private code");
+        if (cxx_dead::libtooling_available()) {
+            const auto shared_tooling =
+                cxx_dead::LibToolingIndexer(shared_options).index(shared.commands);
+            const auto shared_tooling_report = cxx_dead::build_report(
+                shared_tooling.graph, cxx_dead::analyze_reachability(shared_tooling.graph));
+            require(finding_names(shared_tooling.graph, shared_tooling_report) ==
+                            finding_names(shared_indexed.graph, shared_report) &&
+                        shared_tooling_report.public_api_symbols ==
+                            shared_report.public_api_symbols,
+                    "library public API policy differs between AST JSON and LibTooling");
+        }
+
+        const auto core = cxx_dead::select_target_commands(cmake_model, "Debug", "core", commands);
+        require_throws(
+            [&] {
+                static_cast<void>(
+                    cxx_dead::ClangAstIndexer({.project_root = source_root,
+                                               .configuration_id = core.context.configuration,
+                                               .require_library_api_policy = true})
+                        .index(core.commands));
+            },
+            "requires public headers or explicit public API roots");
+
+        const auto manifest_shared =
+            cxx_dead::select_target_commands(manifest_model, "Debug", "shared", commands);
+        require(manifest_shared.context.public_headers == shared.context.public_headers,
+                "manifest v2 public headers differ from CMake metadata");
+
+        const auto header_only =
+            cxx_dead::select_target_commands(manifest_model, "Debug", "header_only", commands);
+        require(header_only.commands.empty() && header_only.context.public_headers.size() == 1U,
+                "interface target did not preserve its observed-only analysis context");
+        require_throws(
+            [&] {
+                static_cast<void>(cxx_dead::ClangAstIndexer(
+                                      {.project_root = source_root,
+                                       .configuration_id = header_only.context.configuration,
+                                       .public_headers = header_only.context.public_headers,
+                                       .require_library_api_policy = true})
+                                      .index(header_only.commands));
+            },
+            "has no compilation context");
+        require_throws(
+            [&] {
+                static_cast<void>(cxx_dead::ClangAstIndexer(
+                                      {.project_root = source_root,
+                                       .configuration_id = shared.context.configuration,
+                                       .selected_target_sources = shared.context.selected_sources,
+                                       .public_headers = {source_root / "header_only.hpp"},
+                                       .infer_shared_library_exports = true})
+                                      .index(shared.commands));
+            },
+            "public header was not observed");
 
         std::cout << "target-aware tests passed\n";
         return 0;

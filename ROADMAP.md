@@ -46,16 +46,17 @@ without treating the compilation database as a single link unit.
 
 ## M4 — Providers and library context
 
-Status: v0.11.0 adds deterministic provider-composed roots, dynamic edges, escapes, suppressions,
-and strict versioned YAML configuration on top of the v0.10.0 callback foundation. Library API
-inference remains open.
+Status: v0.12.0 adds conservative source-level shared/static library API rooting, public-header and
+visibility evidence, and explicit public API roots on top of the v0.11.0 provider foundation.
 
 - Expand the typed provider foundation from callback-registration edges to general roots, dynamic
   edges, escapes, and suppressions. (completed in v0.11.0)
 - Add YAML configuration on top of the v0.10.0 repeatable CLI registration rule. (completed in
   v0.11.0)
 - Conservatively infer shared-library exports, public headers, visibility, and explicit APIs.
-- Define policies for templates and header-only libraries.
+  (completed in v0.12.0 for source metadata)
+- Define policies for templates and header-only libraries. (initial observed-template policy
+  completed in v0.12.0; consumer-context analysis remains open)
 
 Exit criterion: public API with no internal consumers is retained while unreachable private
 implementation islands remain reportable.

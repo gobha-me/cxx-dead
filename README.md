@@ -27,14 +27,15 @@ The prototype already handles:
 - optional direct LibTooling fact extraction without full JSON AST materialization;
 - configuration-aware stable symbol identities and deterministic graph artifacts;
 - target-scoped analysis from CMake File API or explicit manifest metadata;
+- conservative shared/static library public-API rooting from source metadata;
 - bounded AST JSON indexing with per-TU/run timeouts and output-size limits;
 - structured complete, incomplete, and unsupported run diagnostics;
 - human and versioned JSON output;
 - complete display signatures and exact spelling/expansion source extents.
 
-It does not yet infer library APIs, exactly model static-archive member extraction, model
-non-owning factory semantics, jointly analyze multiple build configurations in one report, or
-incrementally cache translation-unit facts.
+It does not inspect built binary export tables, parse linker version scripts, exactly model
+static-archive member extraction, model non-owning factory semantics, jointly analyze multiple
+build configurations in one report, or incrementally cache translation-unit facts.
 Findings are candidates for review, not deletion instructions.
 
 ## Development status
@@ -140,6 +141,11 @@ are analyzed without indexing sibling executables or tests. If the codemodel has
 and one executable, both selections are automatic. Ambiguous configurations or targets fail with
 an instruction to select one; the tool never silently combines them. See the
 [target model](docs/target-model.md) for the manifest fallback and link-semantics contract.
+
+Selecting a shared or module library roots external definitions with effective default/protected
+Clang visibility and external declarations observed in its CMake PUBLIC/INTERFACE header file sets.
+Selecting a static library fails closed unless such public headers or explicit public API roots are
+declared. Manifest schema 2 supplies exact `public_headers` paths for non-CMake build adapters.
 
 An enabled LibTooling build can select direct fact extraction explicitly:
 
@@ -259,6 +265,20 @@ duplicate keys, unsupported schema versions, unmatched selectors, and ambiguous 
 run. Files compose additively and order-independently; there is no implicit discovery, environment
 expansion, globbing, or regex matching.
 
+Provider schema 2 additionally distinguishes library API roots from runtime/provider roots:
+
+```yaml
+schema_version: 2
+provider: sdk_contract
+public_api_roots:
+  - symbol: {qualified_name: engine::sdk_entry}
+    reason: supported external SDK entry point
+```
+
+`public_api_roots` require target-aware analysis of a selected static, shared, module, or interface
+library. Provider schema 1 remains accepted unchanged. Public API roots appear separately as
+`externally_reachable`; their transitive implementation is counted as internal live code.
+
 If a dependency-heavy compilation database contains translation units outside the application, scope
 the input without rewriting the database:
 
@@ -319,16 +339,17 @@ The numeric confidence values in JSON are provisional presentation values, not s
 
 Every classification is backed by an ordered evidence chain. Root, edge, and escape facts retain a
 provider and human-readable reason, while analysis decisions use typed facts rather than matching
-those presentation strings. JSON report schema version 9 adds actionable/suppressed counts and
+those presentation strings. JSON report schema version 10 adds separately evidenced public API,
+internal-live, and internal-unreachable counts; version 9 added actionable/suppressed counts and
 auditable `suppressed_findings`; version 8 added structural/provider reachability counts and
 provider-retained callback evidence; version 7 added explicit run state and
 per-translation-unit diagnostics, and version 6 added an application/target analysis context.
 Version 5 changed `key` to a configuration-aware stable symbol ID. Version 4 added
 complete signatures and spelling/expansion locations and definition ranges while retaining the flat
-finding `file` and `line` fields. Graph artifact schema version 4 adds provider suppressions and
-general configured roots, edges, and escapes; version 3 added callback-registration edges and
+finding `file` and `line` fields. Graph artifact schema version 5 adds public API roots; version 4
+added provider suppressions and general configured roots, edges, and escapes; version 3 added callback-registration edges and
 callable-object escapes; version 2 added target context.
-identity schema version 1 is unchanged and remains independent from the report schema.
+Identity schema version 1 is unchanged and remains independent from the report schema.
 
 ## Current analysis contract
 

@@ -108,9 +108,9 @@ Gate: a mixed repository with two executables and shared/internal libraries repo
 
 ## Milestone 4 — provider API and dynamic systems
 
-Status: v0.11.0 provides a typed provider fact API, strict schema-versioned YAML composition,
-exact symbol selectors, and auditable suppressions. Export/visibility inference and framework
-adapters remain follow-up providers.
+Status: v0.12.0 adds source-level export/visibility and public-header inference plus explicit public
+API roots to the v0.11.0 typed provider foundation. Binary export-table/linker-script inference and
+framework adapters remain follow-up work.
 
 Goal: model project-specific reachability without embedding framework assumptions in the core.
 
@@ -134,6 +134,10 @@ Initial providers:
 Gate: a plugin fixture moves from `possibly_dead` to externally/dynamically reachable with an explanation identifying the responsible provider.
 
 ## Milestone 5 — library context
+
+Status: v0.12.0 provides the initial conservative library context: selected-target public headers,
+effective shared/module visibility, fail-closed static policy, and observed template handling.
+Consumer-context header-only analysis remains open.
 
 Goal: conservatively retain externally consumable source.
 

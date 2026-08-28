@@ -83,6 +83,44 @@ set_tests_properties(cxx_dead_target_cli PROPERTIES
         "\"mode\": \"target\".*\"target_name\": \"production_app\""
 )
 
+add_test(
+    NAME cxx_dead_shared_library_cli
+    COMMAND $<TARGET_FILE:cxx-dead>
+        --cmake-build-dir "${TARGET_FIXTURE_BUILD}"
+        --configuration Debug
+        --target shared
+        --format json
+)
+set_tests_properties(cxx_dead_shared_library_cli PROPERTIES
+    PASS_REGULAR_EXPRESSION
+        "\"public_api_symbols\": 3.*\"internal_unreachable_symbols\": 2"
+)
+
+add_test(
+    NAME cxx_dead_static_library_cli
+    COMMAND $<TARGET_FILE:cxx-dead>
+        --cmake-build-dir "${TARGET_FIXTURE_BUILD}"
+        --configuration Debug
+        --target core
+        --provider-config "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/targets/core-api.yaml"
+        --format json
+)
+set_tests_properties(cxx_dead_static_library_cli PROPERTIES
+    PASS_REGULAR_EXPRESSION "\"classification\": \"externally_reachable\""
+)
+
+add_test(
+    NAME cxx_dead_static_missing_policy_cli
+    COMMAND $<TARGET_FILE:cxx-dead>
+        --cmake-build-dir "${TARGET_FIXTURE_BUILD}"
+        --configuration Debug
+        --target core
+        --format json
+)
+set_tests_properties(cxx_dead_static_missing_policy_cli PROPERTIES
+    WILL_FAIL TRUE
+)
+
 if(CXX_DEAD_ENABLE_LIBTOOLING)
     add_executable(cxx_dead_frontend_tests frontend_tests.cpp)
     target_link_libraries(cxx_dead_frontend_tests PRIVATE cxx_dead_core)

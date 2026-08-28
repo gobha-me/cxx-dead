@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "source_root": "@TARGET_FIXTURE_SOURCE@",
   "build_root": "@TARGET_FIXTURE_BUILD@",
   "configurations": [
@@ -25,6 +25,15 @@
           "name": "shared",
           "type": "shared_library",
           "sources": ["shared.cpp"],
+          "public_headers": ["shared.hpp"],
+          "dependencies": []
+        },
+        {
+          "id": "header_only",
+          "name": "header_only",
+          "type": "interface_library",
+          "sources": [],
+          "public_headers": ["header_only.hpp"],
           "dependencies": []
         },
         {

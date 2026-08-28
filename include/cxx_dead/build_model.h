@@ -26,6 +26,7 @@ struct BuildTarget {
     std::vector<std::filesystem::path> sources;
     std::vector<std::string> dependencies;
     std::vector<std::filesystem::path> artifacts;
+    std::vector<std::filesystem::path> public_headers;
 };
 
 struct BuildConfiguration {
@@ -45,6 +46,8 @@ struct TargetAnalysisContext {
     std::string target_name;
     BuildTargetKind target_kind{BuildTargetKind::Executable};
     std::vector<std::string> closure_targets;
+    std::vector<std::filesystem::path> selected_sources;
+    std::vector<std::filesystem::path> public_headers;
 };
 
 struct TargetSelection {

@@ -74,11 +74,15 @@ struct IndexOptions {
     std::vector<std::string> manual_roots;
     std::vector<CallbackRegistrationRule> callback_registration_rules;
     std::vector<ProviderPolicy> provider_policies;
+    std::vector<std::filesystem::path> selected_target_sources;
+    std::vector<std::filesystem::path> public_headers;
     std::chrono::milliseconds translation_unit_timeout{0};
     std::chrono::milliseconds index_timeout{0};
     std::size_t max_ast_bytes{0};
     std::function<bool()> cancellation_requested;
     bool verbose{false};
+    bool infer_shared_library_exports{false};
+    bool require_library_api_policy{false};
 };
 
 struct IndexResult {

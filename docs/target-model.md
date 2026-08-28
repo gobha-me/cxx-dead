@@ -26,11 +26,12 @@ target. If distinct commands remain ambiguous, analysis fails instead of guessin
 
 ## Explicit manifest fallback
 
-`--target-manifest path.json` accepts schema version 1:
+`--target-manifest path.json` accepts schema versions 1 and 2. Version 2 adds exact public-header
+metadata:
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "source_root": "/workspace/project",
   "build_root": "/workspace/project/build",
   "configurations": [
@@ -42,6 +43,7 @@ target. If distinct commands remain ambiguous, analysis fails instead of guessin
           "name": "core",
           "type": "static_library",
           "sources": ["src/core.cpp"],
+          "public_headers": ["include/core/api.hpp"],
           "dependencies": [],
           "artifacts": ["libcore.a"]
         },
@@ -59,12 +61,14 @@ target. If distinct commands remain ambiguous, analysis fails instead of guessin
 }
 ```
 
-`source_root` and `build_root` are resolved relative to the manifest. Source paths are relative to
+`source_root` and `build_root` are resolved relative to the manifest. Source and public-header paths are relative to
 `source_root`; artifact paths are relative to `build_root`. Supported target types are
 `executable`, `object_library`, `static_library`, `shared_library`, `module_library`,
 `interface_library`, and `utility`. Dependencies refer to target ids. Interface and utility targets
 may carry dependency relationships but do not contribute compiled source files to an analysis
-closure; utility targets cannot be selected.
+closure; utility targets cannot be selected. Schema 1 remains valid but cannot declare
+`public_headers`. For CMake input, PUBLIC/INTERFACE `HEADERS` file-set members are the corresponding
+source of truth; generic `install(FILES|DIRECTORY)` rules are not guessed to belong to a target.
 
 ## Selection and semantics
 
@@ -73,13 +77,22 @@ closure; utility targets cannot be selected.
 - `--target` accepts a target name or id. It is required when more than one executable exists.
   Production and test policies are separate invocations against their respective targets; names are
   never heuristically classified.
-- Executable sources and transitive object-library objects participate directly. Calls traverse
-  into linked shared/module libraries, but uncalled exported APIs are not automatically rooted yet.
+- Executable sources and transitive object-library objects participate directly. Executable mode
+  does not root dependency APIs.
+- A selected shared/module library roots external definitions with effective default/protected
+  visibility and external declarations observed in declared public headers. Only the selected
+  target is export-inferred; linked dependencies remain implementation context.
+- A selected static library requires public headers or provider-schema-2 `public_api_roots`.
+  Missing policy, unmatched explicit roots, or declared headers absent from indexed translation
+  units makes the run incomplete with no findings.
+- Public-header template/inline declarations observed by Clang are retained, while internal-linkage
+  helpers remain reportable. Pure interface libraries without consumer compilation context fail
+  incomplete; no synthetic translation unit is created.
 - Every static-library translation unit in the closure is indexed. Exact archive-member extraction,
   whole-archive flags, and conditional static initializers are not modeled; the report emits a
   diagnostic for this conservative approximation.
 - Missing dependency metadata is diagnosed. Missing or ambiguous required compilation commands,
   malformed replies/manifests, and a closure with no application root fail the run without findings.
 
-Report schema 6 and graph artifact schema 2 expose the configuration, target id/name/kind, and the
-sorted closure target names. Symbol identity schema 1 is unchanged.
+Report schema 10 and graph artifact schema 5 expose public API roots and separate public API,
+internal-live, and internal-unreachable counts. Symbol identity schema 1 is unchanged.

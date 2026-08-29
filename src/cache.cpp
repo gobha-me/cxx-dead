@@ -546,7 +546,7 @@ std::string translation_unit_cache_key(const CompileCommand& command, const Inde
     std::ostringstream components;
     append_component(components, "cache_schema",
                      std::to_string(translation_unit_cache_schema_version));
-    append_component(components, "extractor", "cxx-dead-0.14");
+    append_component(components, "extractor", "cxx-dead-0.15");
     try {
         append_component(components, "cxx_dead_binary", tool_fingerprint("/proc/self/exe"));
     } catch (const std::exception&) {

@@ -458,9 +458,63 @@ ReachabilityResult analyze_reachability(const Graph& graph, ReachabilityMetrics&
         const auto& rhs = graph.symbols()[right.front()];
         const auto& lhs_location = primary_source_extent(lhs).location;
         const auto& rhs_location = primary_source_extent(rhs).location;
-        if (lhs_location.file != rhs_location.file)
-            return lhs_location.file.string() < rhs_location.file.string();
-        return lhs_location.line < rhs_location.line;
+        return std::tuple{lhs_location.file.generic_string(), lhs_location.line,
+                          lhs_location.column,
+                          lhs.key} < std::tuple{rhs_location.file.generic_string(),
+                                                rhs_location.line, rhs_location.column, rhs.key};
+    });
+
+    std::vector<int> scc_by_symbol(count, -1);
+    for (std::size_t scc = 0; scc < result.unreachable_sccs.size(); ++scc) {
+        for (const auto symbol : result.unreachable_sccs[scc])
+            scc_by_symbol[symbol] = static_cast<int>(scc);
+    }
+    for (const auto& edge : graph.edges()) {
+        if (!is_traversable(edge.kind))
+            continue;
+        const auto from_scc = scc_by_symbol[edge.from];
+        const auto to_scc = scc_by_symbol[edge.to];
+        if (from_scc < 0 || to_scc < 0 || from_scc == to_scc)
+            continue;
+        result.unreachable_condensation_edges.push_back({
+            .from_scc = static_cast<std::size_t>(from_scc),
+            .to_scc = static_cast<std::size_t>(to_scc),
+        });
+    }
+    std::ranges::sort(result.unreachable_condensation_edges, [](const auto& left,
+                                                                const auto& right) {
+        return std::tuple{left.from_scc, left.to_scc} < std::tuple{right.from_scc, right.to_scc};
+    });
+    const auto duplicate_edge = std::ranges::unique(result.unreachable_condensation_edges);
+    result.unreachable_condensation_edges.erase(duplicate_edge.begin(), duplicate_edge.end());
+
+    std::vector<std::vector<std::size_t>> weak_adjacency(result.unreachable_sccs.size());
+    for (const auto& edge : result.unreachable_condensation_edges) {
+        weak_adjacency[edge.from_scc].push_back(edge.to_scc);
+        weak_adjacency[edge.to_scc].push_back(edge.from_scc);
+    }
+    std::vector<bool> assigned(result.unreachable_sccs.size(), false);
+    for (std::size_t first = 0; first < result.unreachable_sccs.size(); ++first) {
+        if (assigned[first])
+            continue;
+        auto& component = result.unreachable_weak_components.emplace_back();
+        std::vector<std::size_t> pending{first};
+        assigned[first] = true;
+        while (!pending.empty()) {
+            const auto current = pending.back();
+            pending.pop_back();
+            component.push_back(current);
+            for (const auto adjacent : weak_adjacency[current]) {
+                if (!assigned[adjacent]) {
+                    assigned[adjacent] = true;
+                    pending.push_back(adjacent);
+                }
+            }
+        }
+        std::ranges::sort(component);
+    }
+    std::ranges::sort(result.unreachable_weak_components, [](const auto& left, const auto& right) {
+        return left.front() < right.front();
     });
     metrics.scc_time = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - scc_started);

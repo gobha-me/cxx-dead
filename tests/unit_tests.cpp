@@ -202,6 +202,117 @@ void test_graph_algorithms() {
             "provider provenance included an unreachable registration site");
 }
 
+void test_unreachable_aggregation() {
+    cxx_dead::Graph graph;
+    const auto add_symbol = [&](std::string key, std::string class_name, std::filesystem::path file,
+                                std::size_t begin_line, std::size_t end_line) {
+        cxx_dead::SymbolSource source;
+        if (!file.empty()) {
+            source.spelling = {
+                .location = {.file = file, .line = begin_line, .column = 1},
+                .begin = {.file = file, .line = begin_line, .column = 1},
+                .end = {.file = file, .line = end_line, .column = 1},
+            };
+        }
+        return graph.add_or_merge_symbol({
+            .key = key,
+            .name = key,
+            .qualified_name = key,
+            .class_name = std::move(class_name),
+            .signature = "void ()",
+            .source = std::move(source),
+            .scope = cxx_dead::SymbolScope::Reportable,
+            .defined = true,
+        });
+    };
+    const auto cycle_a = add_symbol("feature-a", "Widget", "src/feature/widget.cpp", 10, 20);
+    const auto cycle_b = add_symbol("feature-b", "Widget", "src/feature/widget.cpp", 18, 25);
+    const auto chain_c = add_symbol("feature-c", {}, "src/feature/widget.cpp", 30, 35);
+    const auto chain_d = add_symbol("feature-d", {}, "src/feature/helper.cpp", 1, 4);
+    const auto disconnected = add_symbol("disconnected", {}, "src/other.cpp", 100, 100);
+    const auto unmeasured = add_symbol("unmeasured", {}, {}, 0, 0);
+    const auto indexed_bridge = graph.add_or_merge_symbol({
+        .key = "indexed-bridge",
+        .name = "indexed-bridge",
+        .qualified_name = "indexed-bridge",
+        .scope = cxx_dead::SymbolScope::Indexed,
+        .defined = true,
+    });
+    const cxx_dead::Evidence evidence{.provider = "aggregation_test", .reason = "topology"};
+    graph.add_edge(cycle_a, cycle_b, cxx_dead::EdgeKind::DirectCall, evidence);
+    graph.add_edge(cycle_b, cycle_a, cxx_dead::EdgeKind::DirectCall, evidence);
+    graph.add_edge(cycle_b, chain_c, cxx_dead::EdgeKind::DirectCall, evidence);
+    graph.add_edge(cycle_b, chain_c, cxx_dead::EdgeKind::DirectCall,
+                   {.provider = "second_provider", .reason = "same topology"});
+    graph.add_edge(chain_c, chain_d, cxx_dead::EdgeKind::Constructs, evidence);
+    graph.add_edge(chain_d, indexed_bridge, cxx_dead::EdgeKind::DirectCall, evidence);
+    graph.add_edge(indexed_bridge, disconnected, cxx_dead::EdgeKind::DirectCall, evidence);
+    graph.add_escape(unmeasured, cxx_dead::EscapeKind::AddressTaken, evidence, cycle_a);
+    graph.add_suppression(chain_c, {.provider = "project_policy", .reason = "audit separately"});
+
+    const auto reachability = cxx_dead::analyze_reachability(graph);
+    require(reachability.unreachable_weak_components.size() == 3U,
+            "indexed bridges or escapes changed weak-component topology");
+    require(reachability.unreachable_condensation_edges.size() == 2U,
+            "acyclic unreachable dependencies were not preserved in the condensation DAG");
+    const auto report = cxx_dead::build_report(graph, reachability);
+    const auto aggregate =
+        std::ranges::find_if(report.unreachable_components, [&](const auto& item) {
+            return std::ranges::any_of(
+                item.members, [&](const auto& member) { return member.symbol == cycle_a; });
+        });
+    require(aggregate != report.unreachable_components.end() && aggregate->sccs.size() == 3U &&
+                aggregate->edges.size() == 2U && aggregate->members.size() == 4U,
+            "acyclic symbols were not grouped above their SCCs");
+    require(aggregate->lines.estimated_loc == 26U && aggregate->lines.unmeasured_symbols == 0U,
+            "component LOC estimate did not union overlapping per-file ranges");
+    const auto type = std::ranges::find_if(
+        aggregate->types, [](const auto& summary) { return summary.label == "Widget"; });
+    require(type != aggregate->types.end() && type->members.size() == 2U &&
+                type->lines.estimated_loc == 16U,
+            "type ownership summary did not retain members or non-overlapping LOC");
+    const auto directory = std::ranges::find_if(
+        aggregate->directories, [](const auto& summary) { return summary.label == "src/feature"; });
+    require(directory != aggregate->directories.end() && directory->members.size() == 4U &&
+                directory->lines.estimated_loc == 26U,
+            "directory ownership summary did not link constituent findings");
+    const auto suppressed = std::ranges::find_if(
+        aggregate->members, [&](const auto& member) { return member.symbol == chain_c; });
+    require(suppressed != aggregate->members.end() &&
+                suppressed->disposition == cxx_dead::AggregateMemberDisposition::Suppressed,
+            "suppressed finding lost its separate aggregate disposition");
+    const auto unmeasured_component =
+        std::ranges::find_if(report.unreachable_components, [&](const auto& item) {
+            return std::ranges::any_of(
+                item.members, [&](const auto& member) { return member.symbol == unmeasured; });
+        });
+    require(unmeasured_component != report.unreachable_components.end() &&
+                unmeasured_component->lines.estimated_loc == 0U &&
+                unmeasured_component->lines.unmeasured_symbols == 1U,
+            "missing source ranges were not explicitly excluded from the estimate");
+
+    std::ostringstream output;
+    cxx_dead::write_json_report(output, graph, reachability, report, {});
+    const auto json = cxx_dead::json::parse(output.str());
+    require(json.find("schema_version")->as_number() == 11.0 &&
+                json.find("unreachable_components")->as_array().size() == 3U,
+            "schema-11 JSON omitted unreachable component aggregates");
+    require(
+        std::ranges::any_of(json.find("unreachable_components")->as_array(),
+                            [](const auto& component) {
+                                return std::ranges::any_of(
+                                    component.find("suppressed_finding_keys")->as_array(),
+                                    [](const auto& key) { return key.as_string() == "feature-c"; });
+                            }),
+        "aggregate JSON did not preserve the suppressed stable-key backlink");
+    const auto& findings = json.find("findings")->as_array();
+    const auto finding = std::ranges::find_if(
+        findings, [](const auto& item) { return item.string_or("key") == "feature-a"; });
+    require(finding != findings.end() && finding->find("component") != nullptr &&
+                finding->find("weak_component") != nullptr,
+            "flat finding did not link to both SCC and weak-component evidence");
+}
+
 void test_stable_identity_contract() {
     const auto external =
         cxx_dead::make_symbol_identity("debug", "c:@F@run#", "_Z3runv", "", "src/run.cpp:12");
@@ -289,8 +400,8 @@ void test_clang_integration() {
     const auto report_json = cxx_dead::json::parse(json_output.str());
     require(report_json.find("findings") != nullptr, "JSON report has no findings field");
     require(report_json.find("schema_version") != nullptr &&
-                report_json.find("schema_version")->as_number() == 10.0,
-            "JSON report does not use provider schema version 9");
+                report_json.find("schema_version")->as_number() == 11.0,
+            "JSON report does not use aggregation schema version 11");
     require(report_json.find("roots") != nullptr && report_json.find("roots")->is_array(),
             "JSON report has no structured roots field");
     require(report_json.find("run") != nullptr &&
@@ -687,7 +798,7 @@ void test_yaml_provider_integration() {
     cxx_dead::write_json_report(report_output, indexed.graph, reachability, report,
                                 indexed.diagnostics);
     const auto report_json = cxx_dead::json::parse(report_output.str());
-    require(report_json.find("schema_version")->as_number() == 10.0 &&
+    require(report_json.find("schema_version")->as_number() == 11.0 &&
                 report_json.find("suppressed_findings")->as_array().size() == 1U &&
                 report_json.find("summary")->find("suppressed_symbols")->as_number() == 1.0,
             "provider report schema omitted auditable suppressions");
@@ -1027,7 +1138,7 @@ void test_differential_analysis() {
                 json.find("changes")->as_array().size() == report.changes.size(),
             "differential JSON omitted its schema or transitions");
     std::ostringstream sarif_output;
-    cxx_dead::write_sarif_differential_report(sarif_output, report, "/workspace", "0.14.0");
+    cxx_dead::write_sarif_differential_report(sarif_output, report, "/workspace", "0.15.0");
     const auto sarif = cxx_dead::json::parse(sarif_output.str());
     const auto& sarif_run = sarif.find("runs")->as_array().front();
     require(sarif.string_or("version") == "2.1.0" &&
@@ -1121,6 +1232,7 @@ int main() {
         test_json();
         test_shell_split();
         test_graph_algorithms();
+        test_unreachable_aggregation();
         test_stable_identity_contract();
         test_clang_integration();
         test_implicit_construction_integration();

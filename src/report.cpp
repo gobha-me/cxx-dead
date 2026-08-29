@@ -6,7 +6,6 @@
 #include <iomanip>
 #include <map>
 #include <ostream>
-#include <set>
 #include <tuple>
 
 namespace cxx_dead {
@@ -146,28 +145,60 @@ void write_json_source(std::ostream& output, const SymbolSource& source) {
     output << '}';
 }
 
-std::map<std::string, std::vector<SymbolId>>
-fully_unreachable_types(const Graph& graph, const ReachabilityResult& reachability) {
-    std::map<std::string, std::vector<SymbolId>> all_members;
-    for (SymbolId id = 0; id < graph.symbols().size(); ++id) {
-        const auto& symbol = graph.symbols()[id];
-        if (symbol.defined && is_reportable(symbol.scope) && !symbol.class_name.empty()) {
-            all_members[symbol.class_name].push_back(id);
+SourceLineEstimate estimate_lines(const Graph& graph, const std::vector<AggregateMember>& members) {
+    std::map<std::string, std::vector<std::pair<std::size_t, std::size_t>>> ranges_by_file;
+    SourceLineEstimate result;
+    for (const auto& member : members) {
+        const auto& extent = primary_source_extent(graph.symbols()[member.symbol]);
+        if (extent.begin.file.empty() || extent.begin.file != extent.end.file ||
+            extent.begin.line == 0 || extent.end.line < extent.begin.line) {
+            ++result.unmeasured_symbols;
+            continue;
         }
+        ranges_by_file[extent.begin.file.generic_string()].emplace_back(extent.begin.line,
+                                                                        extent.end.line);
     }
-    std::map<std::string, std::vector<SymbolId>> result;
-    for (auto& [name, members] : all_members) {
-        if (members.size() >= 2U && std::ranges::none_of(members, [&](SymbolId member) {
-                return reachability.reachable[member];
-            })) {
-            std::ranges::sort(members, [&](SymbolId left, SymbolId right) {
-                return primary_source_extent(graph.symbols()[left]).location.line <
-                       primary_source_extent(graph.symbols()[right]).location.line;
-            });
-            result.emplace(name, std::move(members));
+    for (auto& [file, ranges] : ranges_by_file) {
+        static_cast<void>(file);
+        std::ranges::sort(ranges);
+        std::size_t begin = ranges.front().first;
+        std::size_t end = ranges.front().second;
+        for (std::size_t index = 1; index < ranges.size(); ++index) {
+            const auto& range = ranges[index];
+            if (range.first <= end || range.first - 1U == end) {
+                end = std::max(end, range.second);
+                continue;
+            }
+            result.estimated_loc += end - begin + 1U;
+            begin = range.first;
+            end = range.second;
         }
+        result.estimated_loc += end - begin + 1U;
     }
     return result;
+}
+
+template <typename Label>
+std::vector<OwnershipSummary> summarize_ownership(const Graph& graph,
+                                                  const std::vector<AggregateMember>& members,
+                                                  Label label_for) {
+    std::map<std::string, std::vector<AggregateMember>> grouped;
+    for (const auto& member : members) {
+        auto label = label_for(graph.symbols()[member.symbol]);
+        if (!label.empty())
+            grouped[std::move(label)].push_back(member);
+    }
+    std::vector<OwnershipSummary> summaries;
+    summaries.reserve(grouped.size());
+    for (auto& [label, grouped_members] : grouped) {
+        summaries.push_back({
+            .label = std::move(label),
+            .members = std::move(grouped_members),
+            .lines = {},
+        });
+        summaries.back().lines = estimate_lines(graph, summaries.back().members);
+    }
+    return summaries;
 }
 
 void write_json_run(std::ostream& output, const RunDiagnostics& run) {
@@ -200,6 +231,7 @@ void write_json_run(std::ostream& output, const RunDiagnostics& run) {
 AnalysisReport build_report(const Graph& graph, const ReachabilityResult& result) {
     AnalysisReport report;
     std::vector<bool> public_api_root(graph.symbols().size(), false);
+    std::vector<bool> suppressed_symbol(graph.symbols().size(), false);
     for (const auto& root : graph.roots()) {
         if (!is_public_api(root.kind))
             continue;
@@ -255,6 +287,7 @@ AnalysisReport build_report(const Graph& graph, const ReachabilityResult& result
                 report.findings.push_back(std::move(finding));
             } else {
                 ++report.suppressed_symbols;
+                suppressed_symbol[id] = true;
                 report.suppressed_findings.push_back(
                     {.finding = std::move(finding), .suppressions = std::move(suppressions)});
             }
@@ -334,6 +367,57 @@ AnalysisReport build_report(const Graph& graph, const ReachabilityResult& result
                           lhs.signature} < std::tuple{rhs_location.file.string(), rhs_location.line,
                                                       rhs.qualified_name, rhs.signature};
     });
+    std::vector<std::size_t> weak_component_by_scc(result.unreachable_sccs.size());
+    for (std::size_t component_id = 0; component_id < result.unreachable_weak_components.size();
+         ++component_id) {
+        for (const auto scc : result.unreachable_weak_components[component_id])
+            weak_component_by_scc[scc] = component_id;
+        UnreachableAggregate aggregate{
+            .weak_component = component_id,
+            .sccs = result.unreachable_weak_components[component_id],
+            .edges = {},
+            .members = {},
+            .lines = {},
+            .types = {},
+            .files = {},
+            .directories = {},
+        };
+        for (const auto scc : aggregate.sccs) {
+            for (const auto symbol : result.unreachable_sccs[scc]) {
+                aggregate.members.push_back({
+                    .symbol = symbol,
+                    .disposition = suppressed_symbol[symbol]
+                                       ? AggregateMemberDisposition::Suppressed
+                                       : AggregateMemberDisposition::Actionable,
+                });
+            }
+        }
+        std::ranges::sort(aggregate.members, [&](const auto& left, const auto& right) {
+            return graph.symbols()[left.symbol].key < graph.symbols()[right.symbol].key;
+        });
+        aggregate.lines = estimate_lines(graph, aggregate.members);
+        aggregate.types = summarize_ownership(
+            graph, aggregate.members, [](const Symbol& symbol) { return symbol.class_name; });
+        aggregate.files = summarize_ownership(graph, aggregate.members, [](const Symbol& symbol) {
+            const auto& extent = primary_source_extent(symbol);
+            const auto& file =
+                extent.location.file.empty() ? extent.begin.file : extent.location.file;
+            return file.generic_string();
+        });
+        aggregate.directories =
+            summarize_ownership(graph, aggregate.members, [](const Symbol& symbol) {
+                const auto& extent = primary_source_extent(symbol);
+                const auto& file =
+                    extent.location.file.empty() ? extent.begin.file : extent.location.file;
+                return file.empty() ? std::string{} : file.parent_path().generic_string();
+            });
+        report.unreachable_components.push_back(std::move(aggregate));
+    }
+    for (const auto& edge : result.unreachable_condensation_edges) {
+        const auto component = weak_component_by_scc[edge.from_scc];
+        if (component == weak_component_by_scc[edge.to_scc])
+            report.unreachable_components[component].edges.push_back(edge);
+    }
     return report;
 }
 
@@ -369,6 +453,7 @@ void write_human_report(std::ostream& output, const Graph& graph,
                         const ReachabilityResult& reachability, const AnalysisReport& report,
                         const std::vector<std::string>& diagnostics,
                         const AnalysisMetadata& metadata) {
+    static_cast<void>(reachability);
     output << "Run state: " << to_string(metadata.run.state) << " ("
            << to_string(metadata.run.frontend) << ", " << metadata.run.translation_units.size()
            << " translation units)\n\n";
@@ -440,60 +525,57 @@ void write_human_report(std::ostream& output, const Graph& graph,
     if (report.findings.empty()) {
         output << "No actionable unreachable function definitions found.\n";
     } else {
-        const auto dead_types = fully_unreachable_types(graph, reachability);
-        auto actionable_types = dead_types;
-        std::erase_if(actionable_types, [&](const auto& entry) {
-            return std::ranges::any_of(
-                entry.second, [&](SymbolId id) { return find_finding(report, id) == nullptr; });
-        });
-        std::set<SymbolId> type_members;
-        for (const auto& [type, members] : actionable_types) {
-            output << "UNREACHABLE TYPE\n\n" << type << '\n';
-            if (!members.empty())
-                output << "Location: "
-                       << location(primary_source_extent(graph.symbols()[members.front()]).location)
-                       << '\n';
-            output << "Members:\n";
-            for (const auto member : members) {
-                type_members.insert(member);
-                const auto& symbol = graph.symbols()[member];
-                const auto* finding = find_finding(report, member);
-                output << "  - " << display_symbol(symbol) << " [" << to_string(symbol.kind) << "]";
-                if (finding != nullptr)
-                    output << " " << to_string(finding->classification);
-                output << '\n';
-                if (finding != nullptr)
-                    write_human_evidence(output, graph, finding->evidence, "      ");
-            }
-            output << '\n';
-        }
-
-        for (const auto& component : reachability.unreachable_sccs) {
-            std::vector<SymbolId> visible;
-            std::ranges::copy_if(component, std::back_inserter(visible), [&](SymbolId id) {
-                return !type_members.contains(id) && find_finding(report, id) != nullptr;
-            });
-            if (visible.empty())
+        for (const auto& component : report.unreachable_components) {
+            const auto actionable = static_cast<std::size_t>(
+                std::ranges::count_if(component.members, [](const auto& member) {
+                    return member.disposition == AggregateMemberDisposition::Actionable;
+                }));
+            if (actionable == 0)
                 continue;
-            output << (visible.size() > 1U ? "UNREACHABLE COMPONENT\n\n"
-                                           : "UNREACHABLE SYMBOL\n\n");
-            for (const auto id : visible) {
-                const auto& symbol = graph.symbols()[id];
-                const auto* finding = find_finding(report, id);
+            const auto suppressed = component.members.size() - actionable;
+            output << "UNREACHABLE COMPONENT CANDIDATE\n\n"
+                   << "  Component:       " << component.weak_component << '\n'
+                   << "  SCCs:            " << component.sccs.size() << '\n'
+                   << "  Findings:        " << actionable << " actionable, " << suppressed
+                   << " suppressed\n"
+                   << "  Estimated LOC:   " << component.lines.estimated_loc;
+            if (component.lines.unmeasured_symbols != 0)
+                output << " (" << component.lines.unmeasured_symbols << " unmeasured symbols)";
+            output << "\n  Ownership hints:\n";
+            const auto write_ownership = [&](std::string_view kind,
+                                             const std::vector<OwnershipSummary>& summaries) {
+                for (const auto& summary : summaries) {
+                    output << "    - " << kind << ' ' << summary.label << ": "
+                           << summary.members.size() << " symbols, estimated "
+                           << summary.lines.estimated_loc << " LOC";
+                    if (summary.lines.unmeasured_symbols != 0) {
+                        output << " (" << summary.lines.unmeasured_symbols << " unmeasured)";
+                    }
+                    output << '\n';
+                }
+            };
+            write_ownership("type", component.types);
+            write_ownership("file", component.files);
+            write_ownership("directory", component.directories);
+            output << "  Actionable findings:\n";
+            for (const auto& member : component.members) {
+                if (member.disposition != AggregateMemberDisposition::Actionable)
+                    continue;
+                const auto& symbol = graph.symbols()[member.symbol];
+                const auto* finding = find_finding(report, member.symbol);
                 if (finding == nullptr)
                     continue;
-                output << display_symbol(symbol) << '\n';
-                write_human_source(output, symbol, "  ");
-                output << "  Kind:           " << to_string(symbol.kind) << '\n'
-                       << "  Classification: " << to_string(finding->classification) << '\n'
-                       << "  Confidence:     " << std::fixed << std::setprecision(0)
+                output << "\n    " << display_symbol(symbol) << '\n';
+                write_human_source(output, symbol, "      ");
+                output << "      Kind:           " << to_string(symbol.kind) << '\n'
+                       << "      Classification: " << to_string(finding->classification) << '\n'
+                       << "      Confidence:     " << std::fixed << std::setprecision(0)
                        << finding->confidence * 100.0 << "%\n"
-                       << "  Evidence:\n";
-                write_human_evidence(output, graph, finding->evidence, "    ");
+                       << "      Evidence:\n";
+                write_human_evidence(output, graph, finding->evidence, "        ");
             }
-            if (visible.size() > 1U) {
-                output << "  SCC size:       " << visible.size() << " mutually reachable symbols\n";
-            }
+            if (suppressed != 0)
+                output << "\n  Suppressed members are audited in SUPPRESSED FINDINGS below.\n";
             output << '\n';
         }
     }
@@ -527,11 +609,52 @@ void write_json_report(std::ostream& output, const Graph& graph,
                        const std::vector<std::string>& diagnostics,
                        const AnalysisMetadata& metadata) {
     std::vector<int> component_by_symbol(graph.symbols().size(), -1);
+    std::vector<int> weak_component_by_symbol(graph.symbols().size(), -1);
     for (std::size_t component = 0; component < reachability.unreachable_sccs.size(); ++component) {
         for (const auto symbol : reachability.unreachable_sccs[component]) {
             component_by_symbol[symbol] = static_cast<int>(component);
         }
     }
+    for (const auto& component : report.unreachable_components) {
+        for (const auto& member : component.members)
+            weak_component_by_symbol[member.symbol] = static_cast<int>(component.weak_component);
+    }
+
+    const auto write_member_keys = [&](const std::vector<AggregateMember>& members,
+                                       AggregateMemberDisposition disposition) {
+        output << '[';
+        bool first = true;
+        for (const auto& member : members) {
+            if (member.disposition != disposition)
+                continue;
+            output << (first ? "" : ", ") << '"' << json::escape(graph.symbols()[member.symbol].key)
+                   << '"';
+            first = false;
+        }
+        output << ']';
+    };
+
+    const auto write_ownership = [&](const std::vector<OwnershipSummary>& summaries,
+                                     std::string_view label_name) {
+        output << '[';
+        for (std::size_t index = 0; index < summaries.size(); ++index) {
+            const auto& summary = summaries[index];
+            output << (index == 0 ? "\n" : ",\n") << "        {\n"
+                   << "          \"" << label_name << "\": \"" << json::escape(summary.label)
+                   << "\",\n"
+                   << "          \"estimated_loc\": " << summary.lines.estimated_loc << ",\n"
+                   << "          \"unmeasured_symbols\": " << summary.lines.unmeasured_symbols
+                   << ",\n"
+                   << "          \"finding_keys\": ";
+            write_member_keys(summary.members, AggregateMemberDisposition::Actionable);
+            output << ",\n          \"suppressed_finding_keys\": ";
+            write_member_keys(summary.members, AggregateMemberDisposition::Suppressed);
+            output << "\n        }";
+        }
+        if (!summaries.empty())
+            output << '\n' << "      ";
+        output << ']';
+    };
 
     const auto write_finding = [&](const Finding& finding,
                                    const std::vector<Evidence>* suppressions) {
@@ -552,6 +675,7 @@ void write_json_report(std::ostream& output, const Graph& graph,
                << "      \"confidence\": " << std::fixed << std::setprecision(2)
                << finding.confidence << ",\n"
                << "      \"component\": " << component_by_symbol[finding.symbol] << ",\n"
+               << "      \"weak_component\": " << weak_component_by_symbol[finding.symbol] << ",\n"
                << "      \"evidence\": [";
         for (std::size_t index = 0; index < finding.evidence.size(); ++index) {
             const auto& item = finding.evidence[index];
@@ -630,6 +754,7 @@ void write_json_report(std::ostream& output, const Graph& graph,
            << "    \"internal_unreachable_symbols\": " << report.internal_unreachable_symbols
            << ",\n"
            << "    \"unreachable_symbols\": " << report.unreachable_symbols << ",\n"
+           << "    \"unreachable_components\": " << report.unreachable_components.size() << ",\n"
            << "    \"actionable_unreachable_symbols\": " << report.actionable_unreachable_symbols
            << ",\n"
            << "    \"suppressed_symbols\": " << report.suppressed_symbols << ",\n"
@@ -700,6 +825,58 @@ void write_json_report(std::ostream& output, const Graph& graph,
                << "    }";
     }
     if (!report.provider_reachable.empty())
+        output << '\n';
+    output << "  ],\n"
+           << "  \"unreachable_components\": [";
+    for (std::size_t index = 0; index < report.unreachable_components.size(); ++index) {
+        const auto& component = report.unreachable_components[index];
+        output << (index == 0 ? "\n" : ",\n") << "    {\n"
+               << "      \"id\": " << component.weak_component << ",\n"
+               << "      \"estimated_loc\": " << component.lines.estimated_loc << ",\n"
+               << "      \"unmeasured_symbols\": " << component.lines.unmeasured_symbols << ",\n"
+               << "      \"sccs\": [";
+        for (std::size_t scc_index = 0; scc_index < component.sccs.size(); ++scc_index) {
+            const auto scc = component.sccs[scc_index];
+            std::vector<AggregateMember> scc_members;
+            std::ranges::copy_if(
+                component.members, std::back_inserter(scc_members), [&](const auto& member) {
+                    return component_by_symbol[member.symbol] == static_cast<int>(scc);
+                });
+            output << (scc_index == 0 ? "\n" : ",\n") << "        {\n"
+                   << "          \"id\": " << scc << ",\n"
+                   << "          \"finding_keys\": ";
+            write_member_keys(scc_members, AggregateMemberDisposition::Actionable);
+            output << ",\n          \"suppressed_finding_keys\": ";
+            write_member_keys(scc_members, AggregateMemberDisposition::Suppressed);
+            output << "\n        }";
+        }
+        if (!component.sccs.empty())
+            output << '\n';
+        output << "      ],\n"
+               << "      \"edges\": [";
+        for (std::size_t edge_index = 0; edge_index < component.edges.size(); ++edge_index) {
+            const auto& edge = component.edges[edge_index];
+            output << (edge_index == 0 ? "\n" : ",\n") << "        {\"from_scc\": " << edge.from_scc
+                   << ", \"to_scc\": " << edge.to_scc << '}';
+        }
+        if (!component.edges.empty())
+            output << '\n';
+        output << "      ],\n"
+               << "      \"finding_keys\": ";
+        write_member_keys(component.members, AggregateMemberDisposition::Actionable);
+        output << ",\n      \"suppressed_finding_keys\": ";
+        write_member_keys(component.members, AggregateMemberDisposition::Suppressed);
+        output << ",\n      \"ownership\": {\n"
+               << "      \"types\": ";
+        write_ownership(component.types, "type");
+        output << ",\n      \"files\": ";
+        write_ownership(component.files, "file");
+        output << ",\n      \"directories\": ";
+        write_ownership(component.directories, "directory");
+        output << "\n      }\n"
+               << "    }";
+    }
+    if (!report.unreachable_components.empty())
         output << '\n';
     output << "  ],\n"
            << "  \"findings\": [";

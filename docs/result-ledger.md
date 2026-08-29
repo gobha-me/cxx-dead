@@ -86,6 +86,12 @@ confidence without creating reachability, and suppression removes one candidate 
 preserving its original classification. Unconfigured, unmatched, ambiguous, invalid-schema, and
 provider-file-order controls are asserted directly.
 
+The differential CLI corpus compares the same provider fixture with and without configured dynamic
+reachability. It reports three `newly_unreachable` transitions, selects the two `likely_dead`
+high-confidence transitions under schema-1 policy, excludes the dynamically referenced callback,
+and emits exactly those two current source locations in SARIF. A malformed incomplete-run document
+used as a baseline fails with status 1 rather than producing an empty passing comparison.
+
 The callable corpus contains 16 project definitions. Its eight findings are the unreachable
 registration site, its escaped callback, an escaped `std::function` target, an escaped lambda, two
 reassigned function-pointer targets, and unused function/lambda controls. Direct function-pointer

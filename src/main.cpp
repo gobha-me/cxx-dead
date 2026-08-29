@@ -1,6 +1,7 @@
 #include "cxx_dead/artifact.h"
 #include "cxx_dead/build_model.h"
 #include "cxx_dead/compile_database.h"
+#include "cxx_dead/differential.h"
 #include "cxx_dead/graph.h"
 #include "cxx_dead/indexer.h"
 #include "cxx_dead/provider.h"
@@ -32,6 +33,8 @@ struct CliOptions {
     std::vector<std::filesystem::path> excluded_paths;
     std::optional<std::filesystem::path> output;
     std::optional<std::filesystem::path> graph_output;
+    std::optional<std::filesystem::path> baseline_graph;
+    std::optional<std::filesystem::path> differential_policy;
     std::optional<std::filesystem::path> cache_directory;
     std::optional<std::filesystem::path> cmake_build_directory;
     std::optional<std::filesystem::path> target_manifest;
@@ -53,6 +56,7 @@ struct CliOptions {
     bool configuration_id_explicit{false};
     bool project_root_explicit{false};
     bool fail_on_unreachable{false};
+    bool fail_on_diff{false};
     bool no_cache{false};
 };
 
@@ -84,12 +88,16 @@ Options:
   --tu-timeout SECONDS     Per-translation-unit AST JSON wall-time limit
   --index-timeout SECONDS  Whole AST JSON indexing wall-time limit
   --max-ast-bytes BYTES    Per-translation-unit AST JSON output limit
-  --format human|json      Output format (default: human)
+  --format human|json|sarif
+                           Output format (default: human; SARIF requires a baseline and policy)
   --output PATH             Write the report to a file
   --graph-output PATH       Write deterministic graph artifact JSON to a file
+  --baseline-graph PATH     Compare the current analysis with this graph artifact
+  --diff-policy PATH        Apply a versioned YAML differential policy
   --cache-dir PATH          Store reusable TU facts here (default: PROJECT/.cxx-dead/cache)
   --no-cache                Disable translation-unit cache reads and writes
   --fail-on-unreachable     Exit with status 2 when candidates are found
+  --fail-on-diff            Exit with status 2 on differential policy matches
   --verbose                 Include Clang diagnostics and stage metrics
   --help                    Show this help
   --version                 Show the version
@@ -129,7 +137,7 @@ CliOptions parse_cli(int count, char** arguments) {
             std::exit(0);
         }
         if (argument == "--version") {
-            std::cout << "cxx-dead 0.13.0\n";
+            std::cout << "cxx-dead 0.14.0\n";
             std::exit(0);
         }
         if (argument == "--compile-commands") {
@@ -207,13 +215,18 @@ CliOptions parse_cli(int count, char** arguments) {
             options.max_ast_bytes = static_cast<std::size_t>(bytes);
         } else if (argument == "--format") {
             options.format = require_value(index, count, arguments, argument);
-            if (options.format != "human" && options.format != "json") {
-                throw std::runtime_error("--format must be human or json");
+            if (options.format != "human" && options.format != "json" &&
+                options.format != "sarif") {
+                throw std::runtime_error("--format must be human, json, or sarif");
             }
         } else if (argument == "--output") {
             options.output = require_value(index, count, arguments, argument);
         } else if (argument == "--graph-output") {
             options.graph_output = require_value(index, count, arguments, argument);
+        } else if (argument == "--baseline-graph") {
+            options.baseline_graph = require_value(index, count, arguments, argument);
+        } else if (argument == "--diff-policy") {
+            options.differential_policy = require_value(index, count, arguments, argument);
         } else if (argument == "--cache-dir") {
             options.cache_directory = require_value(index, count, arguments, argument);
         } else if (argument == "--no-cache") {
@@ -222,6 +235,8 @@ CliOptions parse_cli(int count, char** arguments) {
             options.verbose = true;
         } else if (argument == "--fail-on-unreachable") {
             options.fail_on_unreachable = true;
+        } else if (argument == "--fail-on-diff") {
+            options.fail_on_diff = true;
         } else if (argument.starts_with('-')) {
             throw std::runtime_error("unknown option: " + std::string(argument));
         } else if (options.compilation_database.empty()) {
@@ -261,8 +276,29 @@ CliOptions parse_cli(int count, char** arguments) {
         options.output = std::filesystem::absolute(*options.output).lexically_normal();
     if (options.graph_output.has_value())
         options.graph_output = std::filesystem::absolute(*options.graph_output).lexically_normal();
+    if (options.baseline_graph.has_value())
+        options.baseline_graph =
+            std::filesystem::absolute(*options.baseline_graph).lexically_normal();
+    if (options.differential_policy.has_value()) {
+        options.differential_policy =
+            std::filesystem::absolute(*options.differential_policy).lexically_normal();
+    }
     if (options.output.has_value() && options.graph_output == options.output)
         throw std::runtime_error("--output and --graph-output must name different files");
+    if (options.baseline_graph.has_value() && (options.output == options.baseline_graph ||
+                                               options.graph_output == options.baseline_graph)) {
+        throw std::runtime_error("--baseline-graph must differ from --output and --graph-output");
+    }
+    if (options.differential_policy.has_value() && !options.baseline_graph.has_value())
+        throw std::runtime_error("--diff-policy requires --baseline-graph");
+    if (options.fail_on_diff &&
+        (!options.baseline_graph.has_value() || !options.differential_policy.has_value())) {
+        throw std::runtime_error("--fail-on-diff requires --baseline-graph and --diff-policy");
+    }
+    if (options.format == "sarif" &&
+        (!options.baseline_graph.has_value() || !options.differential_policy.has_value())) {
+        throw std::runtime_error("--format sarif requires --baseline-graph and --diff-policy");
+    }
     if (options.no_cache && options.cache_directory.has_value())
         throw std::runtime_error("--cache-dir and --no-cache are mutually exclusive");
     if (options.cache_directory.has_value())
@@ -317,6 +353,10 @@ int main(int argc, char** argv) {
                                                        policy.callback_registrations.begin(),
                                                        policy.callback_registrations.end());
             provider_policies.push_back(std::move(policy));
+        }
+        std::optional<cxx_dead::DifferentialPolicy> differential_policy;
+        if (options.differential_policy.has_value()) {
+            differential_policy = cxx_dead::load_differential_policy(*options.differential_policy);
         }
         cxx_dead::canonicalize_callback_registration_rules(options.callback_registration_rules);
         auto commands = cxx_dead::load_compilation_database(options.compilation_database);
@@ -413,7 +453,7 @@ int main(int argc, char** argv) {
         } catch (const cxx_dead::IndexingError& error) {
             std::ofstream failure_file;
             std::ostream* failure_output = options.format == "json" ? &std::cout : &std::cerr;
-            if (options.output.has_value()) {
+            if (options.output.has_value() && options.format != "sarif") {
                 failure_file.open(*options.output);
                 if (!failure_file) {
                     throw std::runtime_error("cannot open output file: " +
@@ -425,7 +465,7 @@ int main(int argc, char** argv) {
                 cxx_dead::write_json_run_diagnostic(*failure_output, error, report_metadata);
             else
                 cxx_dead::write_human_run_diagnostic(*failure_output, error, report_metadata);
-            if (options.output.has_value())
+            if (options.output.has_value() && options.format != "sarif")
                 std::cerr << "cxx-dead: " << cxx_dead::to_string(error.diagnostics().state)
                           << " indexing run; diagnostics written to " << options.output->string()
                           << '\n';
@@ -470,6 +510,19 @@ int main(int argc, char** argv) {
             artifact_metadata.closure_targets = context.closure_targets;
         }
 
+        std::optional<cxx_dead::DifferentialReport> differential_report;
+        if (options.baseline_graph.has_value()) {
+            std::ifstream baseline_input(*options.baseline_graph);
+            if (!baseline_input) {
+                throw std::runtime_error("cannot open baseline graph artifact: " +
+                                         options.baseline_graph->string());
+            }
+            const auto baseline = cxx_dead::read_graph_artifact(baseline_input);
+            differential_report =
+                cxx_dead::build_differential_report(baseline, indexed.graph, reachability, report,
+                                                    artifact_metadata, differential_policy);
+        }
+
         if (options.graph_output.has_value()) {
             std::ofstream graph_output(*options.graph_output);
             if (!graph_output) {
@@ -492,7 +545,14 @@ int main(int argc, char** argv) {
                 throw std::runtime_error("cannot open output file: " + options.output->string());
             output = &file_output;
         }
-        if (options.format == "json") {
+        if (differential_report.has_value() && options.format == "sarif") {
+            cxx_dead::write_sarif_differential_report(*output, *differential_report,
+                                                      options.project_root, "0.14.0");
+        } else if (differential_report.has_value() && options.format == "json") {
+            cxx_dead::write_json_differential_report(*output, *differential_report);
+        } else if (differential_report.has_value()) {
+            cxx_dead::write_human_differential_report(*output, *differential_report);
+        } else if (options.format == "json") {
             cxx_dead::write_json_report(*output, indexed.graph, reachability, report,
                                         indexed.diagnostics, report_metadata);
         } else {
@@ -533,7 +593,10 @@ int main(int argc, char** argv) {
                       << " symbols=" << indexed.graph.symbols().size()
                       << " edges=" << indexed.graph.edges().size() << '\n';
         }
-        return options.fail_on_unreachable && !report.findings.empty() ? 2 : 0;
+        const auto unreachable_failure = options.fail_on_unreachable && !report.findings.empty();
+        const auto differential_failure = options.fail_on_diff && differential_report.has_value() &&
+                                          differential_report->policy_matches != 0U;
+        return unreachable_failure || differential_failure ? 2 : 0;
     } catch (const std::exception& error) {
         std::cerr << "cxx-dead: error: " << error.what() << '\n';
         return 1;

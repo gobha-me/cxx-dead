@@ -1,6 +1,7 @@
 #include "cxx_dead/artifact.h"
 #include "cxx_dead/cache.h"
 #include "cxx_dead/compile_database.h"
+#include "cxx_dead/differential.h"
 #include "cxx_dead/graph.h"
 #include "cxx_dead/indexer.h"
 #include "cxx_dead/json.h"
@@ -935,6 +936,184 @@ void test_process_limits_and_cancellation() {
             "process cancellation did not return a typed termination reason");
 }
 
+void test_differential_analysis() {
+    const auto make_symbol = [](std::string name, std::size_t line) {
+        auto identity = cxx_dead::make_symbol_identity("default", "", "_Z" + name, "", "");
+        return cxx_dead::Symbol{
+            .key = cxx_dead::stable_symbol_key(identity),
+            .identity = std::move(identity),
+            .name = name,
+            .qualified_name = "diff::" + name,
+            .signature = "void ()",
+            .source = {.spelling = {.location = {.file = "/workspace/" + name + ".cpp",
+                                                 .line = line,
+                                                 .column = 1},
+                                    .begin = {.file = "/workspace/" + name + ".cpp",
+                                              .line = line,
+                                              .column = 1},
+                                    .end = {.file = "/workspace/" + name + ".cpp",
+                                            .line = line,
+                                            .column = 10}}},
+            .scope = cxx_dead::SymbolScope::Reportable,
+            .defined = true,
+            .internal_linkage = true,
+        };
+    };
+    const cxx_dead::Evidence evidence{.provider = "test", .reason = "differential fixture"};
+
+    cxx_dead::Graph baseline_graph;
+    const auto baseline_root = baseline_graph.add_or_merge_symbol(make_symbol("root", 1));
+    const auto baseline_regression =
+        baseline_graph.add_or_merge_symbol(make_symbol("regression", 2));
+    const auto baseline_removed = baseline_graph.add_or_merge_symbol(make_symbol("removed", 3));
+    const auto baseline_recovered = baseline_graph.add_or_merge_symbol(make_symbol("recovered", 4));
+    baseline_graph.add_root(baseline_root, cxx_dead::RootKind::Manual, evidence);
+    baseline_graph.add_edge(baseline_root, baseline_regression, cxx_dead::EdgeKind::DirectCall,
+                            evidence);
+    baseline_graph.canonicalize();
+    static_cast<void>(baseline_removed);
+    static_cast<void>(baseline_recovered);
+
+    cxx_dead::Graph current_graph;
+    const auto current_root = current_graph.add_or_merge_symbol(make_symbol("root", 1));
+    current_graph.add_or_merge_symbol(make_symbol("regression", 2));
+    const auto current_recovered = current_graph.add_or_merge_symbol(make_symbol("recovered", 4));
+    current_graph.add_or_merge_symbol(make_symbol("new_dead", 5));
+    const auto current_new_live = current_graph.add_or_merge_symbol(make_symbol("new_live", 6));
+    const auto current_suppressed = current_graph.add_or_merge_symbol(make_symbol("suppressed", 7));
+    current_graph.add_root(current_root, cxx_dead::RootKind::Manual, evidence);
+    current_graph.add_edge(current_root, current_recovered, cxx_dead::EdgeKind::DirectCall,
+                           evidence);
+    current_graph.add_edge(current_root, current_new_live, cxx_dead::EdgeKind::DirectCall,
+                           evidence);
+    current_graph.add_suppression(current_suppressed,
+                                  {.provider = "test_policy", .reason = "retained ABI"});
+    current_graph.canonicalize();
+
+    const cxx_dead::GraphArtifactMetadata metadata{
+        .configuration_id = "default",
+        .frontend = cxx_dead::IndexFrontend::AstJson,
+        .translation_units = 1,
+    };
+    std::ostringstream baseline_output;
+    cxx_dead::write_graph_artifact(baseline_output, baseline_graph, metadata, {});
+    std::istringstream baseline_input(baseline_output.str());
+    const auto baseline = cxx_dead::read_graph_artifact(baseline_input);
+    std::ostringstream roundtrip_output;
+    cxx_dead::write_graph_artifact(roundtrip_output, baseline.graph, baseline.metadata,
+                                   baseline.diagnostics);
+    require(roundtrip_output.str() == baseline_output.str(),
+            "graph artifact reader did not preserve canonical facts");
+
+    const cxx_dead::DifferentialPolicy policy;
+    const auto current_reachability = cxx_dead::analyze_reachability(current_graph);
+    const auto current_analysis = cxx_dead::build_report(current_graph, current_reachability);
+    const auto report = cxx_dead::build_differential_report(
+        baseline, current_graph, current_reachability, current_analysis, metadata, policy);
+    require(report.new_symbols == 3U && report.newly_unreachable == 1U && report.removed == 1U &&
+                report.became_reachable == 1U && report.policy_matches == 2U,
+            "differential report did not classify the transition matrix");
+    const auto suppressed = std::ranges::find_if(report.changes, [](const auto& change) {
+        return change.symbol.qualified_name == "diff::suppressed";
+    });
+    require(suppressed != report.changes.end() && suppressed->current.suppressed &&
+                !suppressed->policy_match,
+            "suppressed differential finding became actionable");
+
+    std::ostringstream json_output;
+    cxx_dead::write_json_differential_report(json_output, report);
+    const auto json = cxx_dead::json::parse(json_output.str());
+    require(json.find("diff_schema_version")->as_number() == 1.0 &&
+                json.find("changes")->as_array().size() == report.changes.size(),
+            "differential JSON omitted its schema or transitions");
+    std::ostringstream sarif_output;
+    cxx_dead::write_sarif_differential_report(sarif_output, report, "/workspace", "0.14.0");
+    const auto sarif = cxx_dead::json::parse(sarif_output.str());
+    const auto& sarif_run = sarif.find("runs")->as_array().front();
+    require(sarif.string_or("version") == "2.1.0" &&
+                sarif_run.find("results")->as_array().size() == report.policy_matches &&
+                sarif_output.str().contains("new_dead.cpp"),
+            "SARIF did not contain exactly the policy-matching repository locations");
+
+    const auto workspace = cxx_dead::cache_temporary_path("-diff-policy-test");
+    std::filesystem::create_directories(workspace);
+    const auto policy_path = workspace / "policy.yaml";
+    {
+        std::ofstream output(policy_path);
+        output << "schema_version: 1\n"
+                  "changes: [new_symbol, newly_unreachable]\n"
+                  "classifications: [dead, likely_dead]\n"
+                  "targets: [production_app]\n"
+                  "minimum_confidence: 0.95\n";
+    }
+    const auto loaded = cxx_dead::load_differential_policy(policy_path);
+    require(loaded.changes.size() == 2U && loaded.classifications.size() == 2U &&
+                loaded.targets == std::vector<std::string>{"production_app"} &&
+                loaded.minimum_confidence == 0.95,
+            "differential policy did not load its filters");
+    auto target_baseline = baseline;
+    target_baseline.metadata.target_id = "production-id";
+    target_baseline.metadata.target_name = "production_app";
+    target_baseline.metadata.target_kind = "executable";
+    auto target_metadata = metadata;
+    target_metadata.target_id = "production-id";
+    target_metadata.target_name = "production_app";
+    target_metadata.target_kind = "executable";
+    const auto target_report =
+        cxx_dead::build_differential_report(target_baseline, current_graph, current_reachability,
+                                            current_analysis, target_metadata, loaded);
+    require(target_report.policy_matches == 2U,
+            "target-scoped differential policy did not select the intended findings");
+    auto inapplicable_policy = loaded;
+    inapplicable_policy.targets = {"other_app"};
+    try {
+        static_cast<void>(cxx_dead::build_differential_report(
+            target_baseline, current_graph, current_reachability, current_analysis, target_metadata,
+            inapplicable_policy));
+        throw std::runtime_error("inapplicable differential policy unexpectedly compared");
+    } catch (const std::exception& error) {
+        require(std::string(error.what()).contains("does not apply"),
+                "inapplicable differential policy did not fail closed");
+    }
+    target_metadata.target_name = "other_app";
+    try {
+        static_cast<void>(cxx_dead::build_differential_report(
+            target_baseline, current_graph, current_reachability, current_analysis, target_metadata,
+            loaded));
+        throw std::runtime_error("mismatched differential target unexpectedly compared");
+    } catch (const std::exception& error) {
+        require(std::string(error.what()).contains("target identities differ"),
+                "mismatched differential target did not fail closed");
+    }
+    const auto invalid_path = workspace / "invalid.yaml";
+    {
+        std::ofstream output(invalid_path);
+        output << "schema_version: 1\nchanges: []\n";
+    }
+    try {
+        static_cast<void>(cxx_dead::load_differential_policy(invalid_path));
+        throw std::runtime_error("empty differential policy filter unexpectedly loaded");
+    } catch (const std::exception& error) {
+        require(std::string(error.what()).contains("non-empty sequence"),
+                "invalid differential policy did not fail precisely");
+    }
+    std::filesystem::remove_all(workspace);
+
+    auto corrupt = baseline_output.str();
+    const auto schema = corrupt.find("\"artifact_schema_version\": 5");
+    require(schema != std::string::npos, "baseline fixture omitted graph schema");
+    corrupt.replace(schema, std::string("\"artifact_schema_version\": 5").size(),
+                    "\"artifact_schema_version\": 99");
+    try {
+        std::istringstream invalid_input(corrupt);
+        static_cast<void>(cxx_dead::read_graph_artifact(invalid_input));
+        throw std::runtime_error("unsupported graph artifact unexpectedly loaded");
+    } catch (const std::exception& error) {
+        require(std::string(error.what()).contains("unsupported artifact_schema_version"),
+                "unsupported graph artifact did not fail precisely");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -948,6 +1127,7 @@ int main() {
         test_callable_registration_integration();
         test_yaml_provider_integration();
         test_incremental_translation_unit_cache();
+        test_differential_analysis();
         test_process_limits_and_cancellation();
         test_libtooling_availability_contract();
         std::cout << "all cxx-dead tests passed\n";

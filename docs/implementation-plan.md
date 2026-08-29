@@ -153,6 +153,10 @@ Gate: public APIs with zero internal callers are retained, while unreachable non
 
 ## Milestone 6 — differential and CI analysis
 
+Status: v0.14.0 implements explicit baseline graph ingestion, the four stable-ID transition kinds,
+strict YAML classification/target/change/confidence policy, independent exit-2 gating, and
+policy-only SARIF 2.1.0. Hosted annotation upload remains workflow integration work.
+
 Goal: prevent new dead-code debt without requiring historical cleanup.
 
 Prerequisites are stable IDs, stable schema, target/configuration identity, and reproducible baselines.

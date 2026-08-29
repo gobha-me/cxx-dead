@@ -236,6 +236,29 @@ add_test(
 )
 
 add_test(
+    NAME cxx_dead_differential_cli
+    COMMAND "${CMAKE_COMMAND}"
+        -DCXX_DEAD_EXECUTABLE=$<TARGET_FILE:cxx-dead>
+        -DCXX_DEAD_PROVIDER_FIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/fixtures/providers
+        -DCXX_DEAD_DIFF_POLICY=${CMAKE_CURRENT_SOURCE_DIR}/fixtures/differential/policy.yaml
+        -DCXX_DEAD_WORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/differential-cli
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/differential_cli_test.cmake
+)
+
+add_test(
+    NAME cxx_dead_diff_policy_requires_baseline
+    COMMAND $<TARGET_FILE:cxx-dead>
+        --diff-policy ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/differential/policy.yaml
+)
+set_tests_properties(cxx_dead_diff_policy_requires_baseline PROPERTIES WILL_FAIL TRUE)
+
+add_test(NAME cxx_dead_diff_gate_requires_policy COMMAND $<TARGET_FILE:cxx-dead> --fail-on-diff)
+set_tests_properties(cxx_dead_diff_gate_requires_policy PROPERTIES WILL_FAIL TRUE)
+
+add_test(NAME cxx_dead_sarif_requires_diff COMMAND $<TARGET_FILE:cxx-dead> --format sarif)
+set_tests_properties(cxx_dead_sarif_requires_diff PROPERTIES WILL_FAIL TRUE)
+
+add_test(
     NAME cxx_dead_cache_option_conflict
     COMMAND $<TARGET_FILE:cxx-dead> --cache-dir cache --no-cache
 )

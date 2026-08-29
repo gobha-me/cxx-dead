@@ -60,14 +60,16 @@ command normalization ---------------------------> AST JSON subprocess ----+
   commands and emits the same neutral facts directly. It is compiled only when
   `CXX_DEAD_ENABLE_LIBTOOLING=ON`.
 - `graph` merges symbols, stores typed roots, edges, and escapes with structured evidence, traverses
-  live edges, computes unreachable SCCs, and canonicalizes fact ordering by stable symbol ID.
+  live edges, computes unreachable SCCs plus their condensation DAG and weak components, and
+  canonicalizes fact ordering by stable symbol ID.
 - `artifact` writes and strictly reads deterministic graph JSON with independently versioned
   artifact and identity schemas. Ingestion rejects unknown schema versions, malformed facts,
   dangling references, identity mismatches, and incomplete report documents.
 - `differential` compares current and baseline reportable definitions by stable ID, applies a strict
   schema-versioned YAML policy, and writes deterministic human, JSON, or policy-only SARIF 2.1.0.
-- `report` applies typed evidence classifications and writes terminal or schema-versioned JSON
-  evidence chains.
+- `report` applies typed evidence classifications, derives topology-preserving type/file/directory
+  summaries and non-overlapping estimated LOC, and writes terminal or schema-versioned JSON evidence
+  chains. Ownership hints never alter topology, classification, suppression, or policy gating.
 - `json` is a small standards-oriented parser/escaper used for both Clang and compilation database input, avoiding a prototype package dependency.
 
 Each translation unit is merged as a separate neutral graph fact batch, so neither frontend needs
@@ -167,7 +169,9 @@ the expansion extent is primary when present and spelling is primary otherwise.
 
 Clang omits repeated file and line fields in nested JSON nodes. The indexer resolves those omissions
 from traversal context and a cached per-file byte-offset line map rather than emitting line zero.
-JSON report schema version 10 adds public API, internal-live, and internal-unreachable classes;
+JSON report schema version 11 adds the unreachable condensation DAG, weak-component ownership
+summaries, stable-key backlinks, and estimated LOC; version 10 added public API, internal-live, and
+internal-unreachable classes;
 version 9 separated actionable and provider-suppressed findings while retaining suppression
 provenance; version 8 added callable/provider provenance; version 7 added run state and
 translation-unit diagnostics, while version 6 added
@@ -192,7 +196,7 @@ AST JSON subprocesses run in their own process groups; a wall-time limit, output
 
 ## Run states
 
-JSON report schema 10 carries these run states and the status of every selected translation unit:
+JSON report schema 11 carries these run states and the status of every selected translation unit:
 
 - **complete**: every selected translation unit produced parseable AST facts and at least one
   context-appropriate root was found. Only a complete run may emit findings or return policy status

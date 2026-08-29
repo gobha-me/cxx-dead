@@ -177,6 +177,14 @@ struct ReachabilityResult {
     std::vector<bool> structurally_reachable;
     std::vector<bool> provider_reachable;
     std::vector<std::vector<SymbolId>> unreachable_sccs;
+    struct CondensationEdge {
+        std::size_t from_scc{};
+        std::size_t to_scc{};
+
+        bool operator==(const CondensationEdge&) const = default;
+    };
+    std::vector<CondensationEdge> unreachable_condensation_edges;
+    std::vector<std::vector<std::size_t>> unreachable_weak_components;
 };
 
 struct ReachabilityMetrics {

@@ -280,11 +280,18 @@ void test_golden_corpus() {
                                 indexed.diagnostics);
     const auto report_json = cxx_dead::json::parse(json_output.str());
     require(report_json.find("schema_version") != nullptr &&
-                report_json.find("schema_version")->as_number() == 10.0,
-            "golden JSON report should use provider schema version 9");
+                report_json.find("schema_version")->as_number() == 11.0,
+            "golden JSON report should use aggregation schema version 11");
     require(report_json.find("roots") != nullptr &&
                 report_json.find("roots")->as_array().size() >= 2U,
             "golden JSON report should expose structured root evidence");
+    require(report_json.find("unreachable_components") != nullptr &&
+                !report_json.find("unreachable_components")->as_array().empty() &&
+                report_json.find("unreachable_components")->as_array().front().find("sccs") !=
+                    nullptr &&
+                report_json.find("unreachable_components")->as_array().front().find("ownership") !=
+                    nullptr,
+            "golden JSON report should expose topology-first component evidence");
     const auto& findings_json = report_json.find("findings")->as_array();
     const auto escaped_json = std::ranges::find_if(findings_json, [](const auto& finding) {
         return finding.string_or("symbol") == "escaped_callback";
@@ -316,7 +323,9 @@ void test_golden_corpus() {
         return finding.string_or("symbol") == "operator()" &&
                finding.string_or("signature") == "int (int) const";
     });
-    require(lambda_json != findings_json.end() && lambda_json->find("line")->as_number() == 100.0,
+    require(lambda_json != findings_json.end() && lambda_json->find("line")->as_number() == 100.0 &&
+                lambda_json->find("component") != nullptr &&
+                lambda_json->find("weak_component") != nullptr,
             "lambda finding should retain its reconstructed source line");
     const auto lambda = find_symbol(indexed.graph, "operator()", "int (int) const");
     require(!indexed.graph.symbols()[lambda].identity.translation_unit.empty(),
@@ -339,7 +348,10 @@ void test_golden_corpus() {
     require(human_output.str().contains("overloads::select : void (double)") &&
                 human_output.str().contains("operator() : int (int) const") &&
                 human_output.str().contains("Spelling:") &&
-                human_output.str().contains("Expansion:"),
+                human_output.str().contains("Expansion:") &&
+                human_output.str().contains("UNREACHABLE COMPONENT CANDIDATE") &&
+                human_output.str().contains("Estimated LOC:") &&
+                human_output.str().contains("Ownership hints:"),
             "human report should distinguish signatures and macro source locations");
 
     const auto macro = indexed.graph.symbols()[find_symbol(indexed.graph, "macro_dead", "void ()")];

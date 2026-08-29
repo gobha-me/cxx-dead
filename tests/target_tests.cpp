@@ -184,7 +184,7 @@ int main() {
                                     production_report, production.diagnostics, metadata);
         const auto report_json = cxx_dead::json::parse(report_output.str());
         const auto* context = report_json.find("analysis_context");
-        require(report_json.find("schema_version")->as_number() == 10.0 && context != nullptr &&
+        require(report_json.find("schema_version")->as_number() == 11.0 && context != nullptr &&
                     context->string_or("target_name") == "production_app" &&
                     context->string_or("configuration_id") == "Debug",
                 "target report omitted versioned analysis context");

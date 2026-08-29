@@ -73,6 +73,14 @@ time; measurements remain machine-specific and do not establish the large-applic
 
 ## Golden review coverage
 
+The v0.15.0 neutral-graph aggregation fixture contains a two-symbol cycle followed by a two-symbol
+acyclic chain, plus disconnected, unmeasured, suppressed, and non-reportable-bridge controls. The
+cycle remains one SCC, the chain joins it only at the weak-component layer, and the bridge does not
+join report scopes. Type/file/directory summaries link every constituent stable key. Inclusive line
+unions report 26 estimated LOC for the main component and 16 for its overlapping type ranges;
+missing ranges remain explicitly unmeasured. Reversed translation-unit golden reports remain
+byte-identical with the schema-11 aggregation fields.
+
 The shared-library fixture runs identically through AST JSON and LibTooling. Two APIs declared in a
 PUBLIC header file set and one visibility-exported implementation are externally reachable without
 internal callers. A hidden implementation and an internal-linkage public-header helper remain the

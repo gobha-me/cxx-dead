@@ -10,7 +10,7 @@
 
 namespace cxx_dead {
 
-inline constexpr int report_schema_version = 10;
+inline constexpr int report_schema_version = 11;
 
 struct AnalysisMetadata {
     std::string mode{"application"};
@@ -62,6 +62,38 @@ struct SuppressedFinding {
     std::vector<Evidence> suppressions;
 };
 
+enum class AggregateMemberDisposition {
+    Actionable,
+    Suppressed,
+};
+
+struct AggregateMember {
+    SymbolId symbol{};
+    AggregateMemberDisposition disposition{AggregateMemberDisposition::Actionable};
+};
+
+struct SourceLineEstimate {
+    std::size_t estimated_loc{0};
+    std::size_t unmeasured_symbols{0};
+};
+
+struct OwnershipSummary {
+    std::string label;
+    std::vector<AggregateMember> members;
+    SourceLineEstimate lines;
+};
+
+struct UnreachableAggregate {
+    std::size_t weak_component{};
+    std::vector<std::size_t> sccs;
+    std::vector<ReachabilityResult::CondensationEdge> edges;
+    std::vector<AggregateMember> members;
+    SourceLineEstimate lines;
+    std::vector<OwnershipSummary> types;
+    std::vector<OwnershipSummary> files;
+    std::vector<OwnershipSummary> directories;
+};
+
 struct AnalysisReport {
     std::vector<Finding> findings;
     std::size_t reportable_symbols{0};
@@ -80,6 +112,7 @@ struct AnalysisReport {
     std::vector<ProviderReachability> public_api;
     std::vector<ProviderReachability> provider_reachable;
     std::vector<SuppressedFinding> suppressed_findings;
+    std::vector<UnreachableAggregate> unreachable_components;
 };
 
 [[nodiscard]] AnalysisReport build_report(const Graph& graph, const ReachabilityResult& result);

@@ -61,7 +61,7 @@ Remaining hardening tasks:
 2. Limit global-initializer roots to project-owned, linked definitions.
 3. Extend the v0.10.0 callback-registration foundation with general provider-composed roots,
    dynamic edges, YAML policy, and suppressions. (completed in v0.11.0)
-4. Add weak-component/type/directory aggregation above SCCs.
+4. Add weak-component/type/directory aggregation above SCCs. (completed in v0.15.0)
 5. Replace provisional confidence numbers with configurable evidence policy.
 6. Add resource limits, cancellation, and structured incomplete-run diagnostics. (completed in
    v0.8.0)
@@ -174,13 +174,17 @@ Gate: CI reliably fails only on newly introduced policy-matching findings and ex
 
 ## Milestone 7 — architectural reporting
 
+Status: v0.15.0 provides the initial topology-first condensation DAG, weak-component candidates,
+type/file/directory ownership hints, and non-overlapping estimated LOC. Reachability-path and
+missing-incoming-edge explanations remain open.
+
 Goal: elevate symbol facts into maintainable subsystem insights.
 
 Deliverables:
 
-- unreachable condensation DAG;
-- weak-component grouping with type/file/directory ownership hints;
-- estimated non-overlapping source ranges;
+- unreachable condensation DAG; (completed in v0.15.0)
+- weak-component grouping with type/file/directory ownership hints; (completed in v0.15.0)
+- estimated non-overlapping source ranges; (completed in v0.15.0 as inclusive line unions)
 - reachability-path and missing-incoming-edge explanations;
 - optional coverage/profile evidence that never overrides static safety by itself.
 
@@ -191,7 +195,7 @@ Gate: reviewed reports identify abandoned components with materially less noise 
 For the next implementation cycle:
 
 1. Add project-owned global initialization modeling.
-2. Add unreachable weak-component aggregation.
+2. Add unreachable weak-component aggregation. (completed in v0.15.0)
 3. Prototype a LibTooling fact collector and benchmark it against AST JSON (completed in v0.5.0).
 4. Define stable graph artifact and JSON schemas (completed in v0.6.0).
 5. Add CMake File API target ingestion (completed in v0.7.0).

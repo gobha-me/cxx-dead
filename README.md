@@ -4,7 +4,9 @@
 
 > For the translation units in this compilation database, which project-owned function definitions have no path from `main()` or a configured root?
 
-It uses Clang to extract declarations and references, constructs a typed symbol graph, traverses that graph from application roots, identifies unreachable strongly connected components, and emits human-readable or JSON findings.
+It uses Clang to extract declarations and references, constructs a typed symbol graph, traverses
+that graph from application roots, and emits human-readable or JSON findings. Unreachable SCCs are
+condensed into weakly connected component candidates with type, file, and directory ownership hints.
 
 The prototype already handles:
 
@@ -20,7 +22,7 @@ The prototype already handles:
 - `main()`, global-initializer calls, and manual roots;
 - an experimental declaration-name filter for namespace-scoped trials;
 - unreachable cycles using Tarjan's SCC algorithm;
-- aggregation when every defined member of a type is unreachable;
+- topology-first aggregation of unreachable SCCs with auditable ownership and estimated LOC;
 - internal-linkage confidence evidence;
 - structured root, graph-edge, escape, and classification evidence;
 - separate reachability and reporting scopes for framework-aware analysis;
@@ -398,11 +400,17 @@ The numeric confidence values in JSON are provisional presentation values, not s
 
 Every classification is backed by an ordered evidence chain. Root, edge, and escape facts retain a
 provider and human-readable reason, while analysis decisions use typed facts rather than matching
-those presentation strings. JSON report schema version 10 adds separately evidenced public API,
-internal-live, and internal-unreachable counts; version 9 added actionable/suppressed counts and
-auditable `suppressed_findings`; version 8 added structural/provider reachability counts and
-provider-retained callback evidence; version 7 added explicit run state and
-per-translation-unit diagnostics, and version 6 added an application/target analysis context.
+those presentation strings. Aggregation does not change symbol classification or policy behavior:
+schema-11 `unreachable_components` preserve the condensation DAG, link back to actionable and
+suppressed stable keys, and label non-overlapping line-union counts as estimated LOC. Type, file,
+and immediate-parent-directory summaries annotate weak components without splitting them.
+
+JSON report schema version 11 adds topology-first unreachable aggregation; version 10 added
+separately evidenced public API, internal-live, and internal-unreachable counts; version 9 added
+actionable/suppressed counts and auditable `suppressed_findings`; version 8 added
+structural/provider reachability counts and provider-retained callback evidence; version 7 added
+explicit run state and per-translation-unit diagnostics, and version 6 added an application/target
+analysis context.
 Version 5 changed `key` to a configuration-aware stable symbol ID. Version 4 added
 complete signatures and spelling/expansion locations and definition ranges while retaining the flat
 finding `file` and `line` fields. Graph artifact schema version 5 adds public API roots; version 4

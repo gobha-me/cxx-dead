@@ -5,8 +5,8 @@ until the prototype has stable performance and precision measurements.
 
 ## M1 — Application-mode hardening
 
-Status: v0.10.0 adds callable-object escape evidence, direct callable invocation, and configured
-callback-registration provenance. Macro and broader language-modeling work remain open.
+Status: v0.15.0 adds topology-first unreachable component aggregation above the v0.10.0 callable
+foundation. Macro and broader language-modeling work remain open.
 
 - Separate symbols needed for graph traversal from project-owned symbols eligible for reporting.
 - Represent roots, escapes, and classifications as structured evidence.
@@ -14,6 +14,7 @@ callback-registration provenance. Macro and broader language-modeling work remai
   completed in v0.9.0)
 - Improve lambda, callable, macro, and source-range coverage. (initial callable and registration
   coverage completed in v0.10.0)
+- Aggregate unreachable SCCs with type/file/directory ownership hints. (completed in v0.15.0)
 - Add resource limits and explicit incomplete-run diagnostics. (completed in v0.8.0)
 - Expand the golden fixture corpus and reviewed real-project result ledger.
 
@@ -68,14 +69,13 @@ implementation islands remain reportable.
 
 ## M5 — Differential and CI analysis
 
-Status: v0.14.0 adds strict graph-artifact ingestion, stable-ID reachability transitions,
-schema-versioned YAML gating policy, and policy-filtered SARIF 2.1.0 output. GitHub workflow
-packaging and architectural aggregation remain open.
+Status: v0.15.0 adds explainable topology-first component aggregation on top of the v0.14.0
+differential, gating-policy, and SARIF foundation. GitHub workflow packaging remains open.
 
 - Compare stable graph artifacts across revisions. (completed in v0.14.0 for one explicit baseline)
 - Report newly unreachable and newly reachable symbols. (completed in v0.14.0)
 - Add policy thresholds, SARIF, and code-review annotations. (policy and SARIF completed in v0.14.0)
-- Aggregate symbols into explainable types, files, and subsystems.
+- Aggregate symbols into explainable types, files, and subsystems. (completed in v0.15.0)
 
 Exit criterion: CI can fail specifically on newly introduced, policy-matching findings without
 depending on historical cleanup.

@@ -23,8 +23,15 @@ struct GraphArtifactMetadata {
     std::size_t translation_units{0};
 };
 
+struct GraphArtifact {
+    Graph graph;
+    GraphArtifactMetadata metadata;
+    std::vector<std::string> diagnostics;
+};
+
 void write_graph_artifact(std::ostream& output, const Graph& graph,
                           const GraphArtifactMetadata& metadata,
                           const std::vector<std::string>& diagnostics);
+[[nodiscard]] GraphArtifact read_graph_artifact(std::istream& input);
 
 } // namespace cxx_dead

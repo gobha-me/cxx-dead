@@ -1,0 +1,8 @@
+schema_version: 1
+changes:
+  - new_symbol
+  - newly_unreachable
+classifications:
+  - dead
+  - likely_dead
+minimum_confidence: 0.95

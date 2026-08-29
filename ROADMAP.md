@@ -68,9 +68,13 @@ implementation islands remain reportable.
 
 ## M5 — Differential and CI analysis
 
-- Compare stable graph artifacts across revisions.
-- Report newly unreachable and newly reachable symbols.
-- Add policy thresholds, SARIF, and code-review annotations.
+Status: v0.14.0 adds strict graph-artifact ingestion, stable-ID reachability transitions,
+schema-versioned YAML gating policy, and policy-filtered SARIF 2.1.0 output. GitHub workflow
+packaging and architectural aggregation remain open.
+
+- Compare stable graph artifacts across revisions. (completed in v0.14.0 for one explicit baseline)
+- Report newly unreachable and newly reachable symbols. (completed in v0.14.0)
+- Add policy thresholds, SARIF, and code-review annotations. (policy and SARIF completed in v0.14.0)
 - Aggregate symbols into explainable types, files, and subsystems.
 
 Exit criterion: CI can fail specifically on newly introduced, policy-matching findings without

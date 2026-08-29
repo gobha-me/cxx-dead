@@ -30,6 +30,7 @@ The prototype already handles:
 - conservative shared/static library public-API rooting from source metadata;
 - bounded AST JSON indexing with per-TU/run timeouts and output-size limits;
 - dependency-validated incremental per-TU fact caching with atomic corruption recovery;
+- stable-ID differential analysis with strict YAML policy and SARIF 2.1.0 output;
 - structured complete, incomplete, and unsupported run diagnostics;
 - human and versioned JSON output;
 - complete display signatures and exact spelling/expansion source extents.
@@ -225,8 +226,44 @@ cxx-dead build/compile_commands.json \
 `--configuration-id` defaults to `default`. It participates in every stable symbol ID, so use the
 same value for comparable runs and distinct values for configurations whose declarations may
 differ. The graph artifact records symbols, typed edges, roots, escapes, source extents, identity
-quality, and diagnostics. Graph-artifact ingestion remains future work; incremental reuse uses an
-independently versioned internal TU-fact cache rather than treating this public artifact as storage.
+quality, and diagnostics. Incremental reuse uses an independently versioned internal TU-fact cache
+rather than treating this public artifact as storage.
+
+Compare a current complete analysis with an explicitly supplied baseline artifact. This never
+checks out a revision or builds the baseline implicitly:
+
+```yaml
+schema_version: 1
+changes: [new_symbol, newly_unreachable]
+classifications: [dead, likely_dead]
+targets: [production_app]
+minimum_confidence: 0.95
+```
+
+```bash
+cxx-dead build/compile_commands.json \
+  --cmake-build-dir build \
+  --configuration Debug \
+  --target production_app \
+  --baseline-graph base-production.graph.json \
+  --diff-policy cxx-dead-diff.yaml \
+  --fail-on-diff \
+  --format sarif \
+  --output cxx-dead.sarif
+```
+
+The baseline and current run must use graph artifact schema 5, identity schema 1, the same frontend,
+configuration ID, and selected target identity. Human and JSON differential reports include all
+`new_symbol`, `newly_unreachable`, `removed`, and `became_reachable` transitions for defined,
+reportable symbols. A new symbol is reported whether reachable or unreachable, but only an
+unsuppressed unreachable new symbol or newly unreachable existing symbol can match policy. SARIF
+contains only policy matches and uses current repository-relative source locations.
+
+Differential policy files are explicit schema-1 YAML. Omitted filters mean both gateable change
+kinds, every classification and target, and a zero confidence floor. Supplied lists must be
+non-empty, target names match exactly, and unknown/duplicate keys or values fail closed.
+`--fail-on-diff` requires both a baseline and policy and returns 2 on a match. A missing, malformed,
+incompatible, or incomplete baseline returns 1; it can never become a passing empty comparison.
 
 Additional roots and CI behavior:
 
@@ -326,6 +363,7 @@ declarations entirely.
 `--fail-on-unreachable` returns status 2 when a complete run contains any actionable unreachable
 candidate. Provider-suppressed candidates remain in `suppressed_findings` with their original
 classification and suppression provenance, but do not trigger status 2.
+`--fail-on-diff` is independent and returns status 2 only for differential policy matches.
 Analysis/indexing errors, resource limits, and unsupported requests return status 1. A successful
 advisory run returns status 0 regardless of findings. Signal cancellation remains fail-closed and
 uses the conventional signal-derived status (130 for `SIGINT`, 143 for `SIGTERM`).
@@ -371,6 +409,8 @@ finding `file` and `line` fields. Graph artifact schema version 5 adds public AP
 added provider suppressions and general configured roots, edges, and escapes; version 3 added callback-registration edges and
 callable-object escapes; version 2 added target context.
 Identity schema version 1 is unchanged and remains independent from the report schema.
+Differential report schema version 1 records baseline/current contexts, the four stable-ID change
+kinds, both reachability states, classification evidence, suppressions, and policy-match status.
 
 ## Current analysis contract
 

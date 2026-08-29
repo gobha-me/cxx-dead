@@ -27,11 +27,14 @@ command normalization ---------------------------> AST JSON subprocess ----+
                     |                           |             |
                     v                           v             v
               root traversal               Tarjan SCC   graph artifact
-                    |                           |
-                    +-------------+-------------+
+                    |                           |             |
+                    +-------------+-------------+             v
+                                  |                    strict baseline read
+                                  v                           |
+                       classification/reporting <------------+
                                   |
                                   v
-                       classification/reporting
+                       differential / SARIF
 ```
 
 ## Modules
@@ -58,8 +61,11 @@ command normalization ---------------------------> AST JSON subprocess ----+
   `CXX_DEAD_ENABLE_LIBTOOLING=ON`.
 - `graph` merges symbols, stores typed roots, edges, and escapes with structured evidence, traverses
   live edges, computes unreachable SCCs, and canonicalizes fact ordering by stable symbol ID.
-- `artifact` writes deterministic graph JSON with independently versioned artifact and identity
-  schemas.
+- `artifact` writes and strictly reads deterministic graph JSON with independently versioned
+  artifact and identity schemas. Ingestion rejects unknown schema versions, malformed facts,
+  dangling references, identity mismatches, and incomplete report documents.
+- `differential` compares current and baseline reportable definitions by stable ID, applies a strict
+  schema-versioned YAML policy, and writes deterministic human, JSON, or policy-only SARIF 2.1.0.
 - `report` applies typed evidence classifications and writes terminal or schema-versioned JSON
   evidence chains.
 - `json` is a small standards-oriented parser/escaper used for both Clang and compilation database input, avoiding a prototype package dependency.
@@ -170,11 +176,17 @@ spelling and expansion extents. Graph artifact schema 5 adds public API roots; s
 general provider facts and suppressions; schema 3 added callable registration and escape facts;
 schema 2 added target context.
 Identity schema 1 remains independently versioned.
+Differential schema 1 is independent from both. It records `new_symbol`, `newly_unreachable`,
+`removed`, and `became_reachable` transitions plus baseline/current reachability, classification,
+suppression, and policy-match state.
 
 ## Failure model
 
 The index is all-or-nothing. A nonzero subprocess result, malformed AST JSON, resource limit, or
 failed LibTooling action aborts analysis. Already collected facts are destroyed before reporting.
+Differential analysis additionally requires a complete current index and a strict, compatible
+baseline artifact. Missing, malformed, schema-incompatible, frontend-mismatched,
+configuration-mismatched, or target-mismatched baselines fail with status 1 before diff output.
 AST JSON subprocesses run in their own process groups; a wall-time limit, output limit, `SIGINT`, or
 `SIGTERM` terminates Clang and its descendants with TERM followed by KILL after a short grace period.
 

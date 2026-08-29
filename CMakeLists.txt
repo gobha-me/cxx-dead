@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(cxx-dead VERSION 0.13.0 LANGUAGES CXX)
+project(cxx-dead VERSION 0.14.0 LANGUAGES CXX)
 
 option(CXX_DEAD_BUILD_TESTS "Build cxx-dead tests" ON)
 option(CXX_DEAD_ENABLE_LIBTOOLING "Build the experimental LibTooling frontend" OFF)
@@ -12,6 +12,7 @@ add_library(cxx_dead_core
     src/build_model.cpp
     src/cache.cpp
     src/compile_database.cpp
+    src/differential.cpp
     src/graph.cpp
     src/indexer.cpp
     src/json.cpp

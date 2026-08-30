@@ -45,8 +45,9 @@ Findings are candidates for review, not deletion instructions.
 ## Development status
 
 `cxx-dead` is a pre-alpha research prototype. Its CLI, JSON schema, and analysis semantics may
-change between revisions. It is useful for experiments and reviewed audits, but it is not yet a
-safe basis for automatic source deletion or blocking production CI.
+change between revisions. It is useful for experiments, reviewed audits, and a routine
+investigative coding-agent check, but it is not a safe basis for automatic source deletion or an
+unattended production merge gate.
 
 The current implementation is Linux/POSIX-only because the AST JSON frontend uses POSIX process
 APIs. It has been exercised with GCC 14, Clang 18/20, and Clang 20 AST output.
@@ -267,6 +268,10 @@ non-empty, target names match exactly, and unknown/duplicate keys or values fail
 `--fail-on-diff` requires both a baseline and policy and returns 2 on a match. A missing, malformed,
 incompatible, or incomplete baseline returns 1; it can never become a passing empty comparison.
 
+For the validated baseline/current command sequence, resource guidance, exit handling, and a
+copy-ready agent prompt, see the [coding-agent workflow](docs/coding-agent-workflow.md). The check is
+target-scoped and investigative: a policy match requires review, not automatic deletion.
+
 Additional roots and CI behavior:
 
 ```bash
@@ -454,6 +459,8 @@ materialized lazily as opaque terminals, and excluded paths do not enter the gra
   namespace aliases, and framework callback limitations.
 - [Obscura differential field trial](docs/obscura-trial.md) validates a bounded target-scoped
   baseline/current agent check, incremental cache reuse, SARIF, and manual policy-match review.
+- [Coding-agent workflow](docs/coding-agent-workflow.md) provides the supported command sequence,
+  fail-closed fallbacks, and copy-ready adoption prompt.
 - [Result ledger](docs/result-ledger.md) records reviewed corpus outcomes, resource measurements,
   and the completeness of each measurement.
 - [Roadmap](ROADMAP.md) defines the maintained milestones and their acceptance gates.

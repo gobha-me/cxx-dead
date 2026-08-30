@@ -246,6 +246,17 @@ add_test(
 )
 
 add_test(
+    NAME cxx_dead_agent_workflow_cli
+    COMMAND "${CMAKE_COMMAND}"
+        -DCXX_DEAD_EXECUTABLE=$<TARGET_FILE:cxx-dead>
+        -DCXX_DEAD_TARGET_FIXTURE_SOURCE=${TARGET_FIXTURE_SOURCE}
+        -DCXX_DEAD_TARGET_FIXTURE_BUILD=${TARGET_FIXTURE_BUILD}
+        -DCXX_DEAD_DIFF_POLICY=${CMAKE_CURRENT_SOURCE_DIR}/fixtures/differential/policy.yaml
+        -DCXX_DEAD_WORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/agent-workflow-cli
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/agent_workflow_cli_test.cmake
+)
+
+add_test(
     NAME cxx_dead_diff_policy_requires_baseline
     COMMAND $<TARGET_FILE:cxx-dead>
         --diff-policy ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/differential/policy.yaml

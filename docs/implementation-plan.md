@@ -158,7 +158,8 @@ Gate: public APIs with zero internal callers are retained, while unreachable non
 Status: v0.14.0 implements explicit baseline graph ingestion, the four stable-ID transition kinds,
 strict YAML classification/target/change/confidence policy, independent exit-2 gating, and
 policy-only SARIF 2.1.0. The v0.15.1 Obscura trial validates those contracts on a pinned real change;
-hosted annotation upload and agent-prompt adoption remain workflow integration work.
+v0.15.2 documents and validates the routine investigative coding-agent workflow. Hosted annotation
+upload remains workflow integration work.
 
 Goal: prevent new dead-code debt without requiring historical cleanup.
 

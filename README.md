@@ -452,6 +452,8 @@ materialized lazily as opaque terminals, and excluded paths do not enter the gra
   finding interpretation.
 - [Null Vector field trial](docs/null-vector-trial.md) covers dependency scoping, source mapping,
   namespace aliases, and framework callback limitations.
+- [Obscura differential field trial](docs/obscura-trial.md) validates a bounded target-scoped
+  baseline/current agent check, incremental cache reuse, SARIF, and manual policy-match review.
 - [Result ledger](docs/result-ledger.md) records reviewed corpus outcomes, resource measurements,
   and the completeness of each measurement.
 - [Roadmap](ROADMAP.md) defines the maintained milestones and their acceptance gates.

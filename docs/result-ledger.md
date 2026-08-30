@@ -27,6 +27,9 @@ fact bytes are an in-memory neutral-fact payload estimate before cross-TU mergin
 
 | Run | Revision / environment | State | Reviewed findings | TP | FP | Known FN | Wall time | Peak RSS | AST / fact bytes | Defined / graph symbols | Edges |
 | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Obscura differential, warm TU cache | v0.15.1 candidate; Obscura `a1c15d8`; Clang 20.1.8 | complete | 1 policy match / 1 change | 1 | 0 | 0 | 1.053 s | 47,852 KiB | 0 / 9,884,978 | 85 / 2,314 | 2,880 |
+| Obscura differential, incremental TU cache | v0.15.1 candidate; `52c0c7d` to `a1c15d8`; Clang 20.1.8 | complete | 1 policy match / 1 change | 1 | 0 | 0 | 65.411 s | 2,923,164 KiB | 6,021,565,606 / 9,884,978 | 85 / 2,314 | 2,880 |
+| Obscura baseline, cold TU cache | v0.15.1 candidate; Obscura `52c0c7d`; Clang 20.1.8 | complete | 83 historical findings / differential baseline | not individually enumerated | 0 known in differential scope | not measured | 264.370 s | 3,488,216 KiB | 27,712,181,052 / 9,798,500 | 84 / 2,294 | 2,879 |
 | Golden corpus, AST JSON, warm TU cache | v0.13.0 candidate; Clang 20.1.8; Linux x86-64 | complete | 18 / 18 | 18 | 0 | 0 | 3 ms | 4,944 KiB | 0 / 24,160 | 39 / 40 | 20 |
 | Golden corpus, AST JSON, cold TU cache | v0.13.0 candidate; Clang 20.1.8; Linux x86-64 | complete | 18 / 18 | 18 | 0 | 0 | 76 ms | 95,144 KiB | 202,187 / 24,160 | 39 / 40 | 20 |
 | Shared-library API fixture, AST JSON/LibTooling | v0.12.0 candidate; CMake File API; Clang 20.1.8 | complete | 2 / 2 private findings plus 3 public API definitions | 2 | 0 | 0 | not benchmarked | not benchmarked | not captured | 5 / 6 | 0 |
@@ -70,6 +73,14 @@ The v0.13.0 golden cache rows are consecutive invocations with the same explicit
 The warm run validated and reused all three TU entries, emitted no AST JSON, and produced a
 byte-identical JSON report. Stage telemetry recorded 1 ms of cache validation and zero indexing
 time; measurements remain machine-specific and do not establish the large-application M2 gate.
+
+The Obscura comparison used one disposable source path so baseline and current cache identities
+remained comparable. The incremental run reused 32 TermForge TUs and reindexed 23 changed-command
+TUs; the fully warm repeat reused all 55 and produced byte-identical graph and differential JSON.
+At 512 MiB and 1 GiB per-TU AST limits, indexing returned incomplete status 1 without findings or a
+graph. A 2 GiB ceiling completed and isolated the new unreachable `obscura::render::hold_d0` as the
+only policy match. It is a reviewed true positive in the selected application context but intentional
+staged work, not automatic deletion evidence; see the Obscura field trial for the full interpretation.
 
 ## Golden review coverage
 

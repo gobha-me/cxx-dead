@@ -69,8 +69,9 @@ implementation islands remain reportable.
 
 ## M5 — Differential and CI analysis
 
-Status: v0.15.0 adds explainable topology-first component aggregation on top of the v0.14.0
-differential, gating-policy, and SARIF foundation. GitHub workflow packaging remains open.
+Status: v0.15.1 validates the differential, gating-policy, resource-limit, cache, and SARIF
+foundation in a third real-application advisory rollout. GitHub workflow packaging and agent-prompt
+adoption remain open.
 
 - Compare stable graph artifacts across revisions. (completed in v0.14.0 for one explicit baseline)
 - Report newly unreachable and newly reachable symbols. (completed in v0.14.0)

@@ -67,6 +67,191 @@ void test_shell_split() {
     require(arguments[2] == "-DNAME=two words", "single quoted argument was not preserved");
 }
 
+void test_compile_command_normalization() {
+    const auto workspace = cxx_dead::cache_temporary_path("-command-normalization-test");
+    struct Cleanup {
+        std::filesystem::path path;
+        ~Cleanup() {
+            std::error_code error;
+            std::filesystem::remove_all(path, error);
+        }
+    } cleanup{workspace};
+    std::filesystem::create_directories(workspace);
+    const auto source = workspace / "main.cpp";
+    const auto pch = workspace / "prefix.pch";
+    const auto pcm = workspace / "core.pcm";
+    const auto module_map = workspace / "module.modulemap";
+    const auto inner_response = workspace / "inner.rsp";
+    const auto outer_response = workspace / "outer.rsp";
+    for (const auto& path : {source, pch, pcm, module_map}) {
+        std::ofstream output(path, std::ios::binary);
+        output << path.filename().string();
+    }
+    for (const std::string driver : {"clang++", "g++-14", "x86_64-linux-gnu-g++", "c++"}) {
+        const auto direct = cxx_dead::normalize_compile_command({
+            .directory = workspace,
+            .file = source,
+            .arguments = {driver, "-c", source.string()},
+        });
+        require(direct.arguments.front() == driver && direct.arguments.back() == source.string(),
+                "supported direct compiler driver did not normalize");
+    }
+    for (const std::string launcher : {"ccache", "sccache", "distcc", "icecc"}) {
+        const auto launched = cxx_dead::normalize_compile_command({
+            .directory = workspace,
+            .file = source,
+            .arguments = {launcher, "clang++", "-c", source.string()},
+        });
+        require(launched.arguments.front() == "clang++",
+                "supported compiler launcher did not normalize");
+    }
+    {
+        std::ofstream output(inner_response);
+        output << "-DNAME='two words'";
+    }
+    {
+        std::ofstream output(outer_response);
+        output << "-std=c++23 @inner.rsp -c \"" << source.string()
+               << "\" -o ignored.o -MF ignored.d";
+    }
+
+    const cxx_dead::CompileCommand command{
+        .directory = workspace,
+        .file = source,
+        .arguments = {"ccache", "sccache", "x86_64-linux-gnu-clang++-20", "@outer.rsp",
+                      "-include-pch", pch.filename().string(),
+                      "-fmodule-file=core=" + pcm.filename().string(),
+                      "-fmodule-map-file=" + module_map.filename().string(),
+                      "-fmodule-output=ignored.pcm", "-fvendor-semantic-mode"},
+        .output = workspace / "ignored.o",
+    };
+    const auto normalized = cxx_dead::normalize_compile_command(command);
+    require(normalized.arguments.front() == "x86_64-linux-gnu-clang++-20",
+            "launcher normalization did not retain the compiler driver");
+    require(normalized.arguments.back() == source.string(),
+            "normalized command did not end in exactly one source argument");
+    require(std::ranges::count(normalized.arguments, source.string()) == 1,
+            "normalized command retained a duplicate source argument");
+    require(std::ranges::find(normalized.arguments, "-DNAME=two words") !=
+                normalized.arguments.end(),
+            "nested response-file quoting was not preserved");
+    require(std::ranges::find(normalized.arguments, "-fvendor-semantic-mode") !=
+                normalized.arguments.end(),
+            "unknown semantic compiler option was not preserved");
+    require(std::ranges::none_of(normalized.arguments,
+                                 [](const std::string& argument) {
+                                     return argument == "-c" || argument == "-o" ||
+                                            argument == "ignored.o" || argument == "-MF" ||
+                                            argument == "ignored.d" ||
+                                            argument.starts_with("-fmodule-output");
+                                 }),
+            "output or dependency-generation arguments survived normalization");
+    require(
+        normalized.command_inputs.size() == 5U &&
+            std::ranges::find(normalized.command_inputs, pch) != normalized.command_inputs.end() &&
+            std::ranges::find(normalized.command_inputs, pcm) != normalized.command_inputs.end() &&
+            std::ranges::find(normalized.command_inputs, module_map) !=
+                normalized.command_inputs.end(),
+        "response, PCH, PCM, and module-map inputs were not tracked");
+
+    const cxx_dead::IndexOptions options{
+        .project_root = workspace,
+        .configuration_id = "command-normalization-test",
+    };
+    const auto first_key =
+        cxx_dead::translation_unit_cache_key(normalized, options, cxx_dead::IndexFrontend::AstJson);
+    {
+        std::ofstream output(pcm, std::ios::app | std::ios::binary);
+        output << "changed";
+    }
+    const auto second_key = cxx_dead::translation_unit_cache_key(
+        cxx_dead::normalize_compile_command(command), options, cxx_dead::IndexFrontend::AstJson);
+    require(first_key != second_key, "changed PCM input did not invalidate the command cache key");
+
+    const auto require_normalization_failure = [&](std::vector<std::string> arguments,
+                                                   std::string_view expected) {
+        auto invalid = command;
+        invalid.arguments = std::move(arguments);
+        try {
+            static_cast<void>(cxx_dead::normalize_compile_command(invalid));
+            throw std::runtime_error("invalid compilation command unexpectedly normalized");
+        } catch (const std::exception& error) {
+            require(std::string(error.what()).contains(expected),
+                    "compilation command failed with the wrong diagnostic: " +
+                        std::string(error.what()));
+        }
+    };
+    require_normalization_failure({"env", "MODE=1", "clang++", source.string()},
+                                  "unsupported compiler or launcher");
+    require_normalization_failure(
+        {"ccache", "--config-path", "cache.conf", "clang++", source.string()},
+        "unsupported compiler or launcher");
+    require_normalization_failure({"clang++", "@missing.rsp"}, "cannot open response file");
+
+    const auto malformed = workspace / "malformed.rsp";
+    {
+        std::ofstream output(malformed);
+        output << "-DVALUE='unterminated";
+    }
+    require_normalization_failure({"clang++", "@malformed.rsp"}, "invalid response file");
+
+    const auto cycle_a = workspace / "cycle-a.rsp";
+    const auto cycle_b = workspace / "cycle-b.rsp";
+    {
+        std::ofstream output(cycle_a);
+        output << "@cycle-b.rsp";
+    }
+    {
+        std::ofstream output(cycle_b);
+        output << "@cycle-a.rsp";
+    }
+    require_normalization_failure({"clang++", "@cycle-a.rsp"}, "cyclic response file");
+
+    for (std::size_t index = 0; index < 17U; ++index) {
+        std::ofstream output(workspace / ("depth-" + std::to_string(index) + ".rsp"));
+        if (index + 1U < 17U)
+            output << "@depth-" << index + 1U << ".rsp";
+        else
+            output << "-DDEEPEST=1";
+    }
+    require_normalization_failure({"clang++", "@depth-0.rsp"}, "exceeds 16 levels");
+
+    const auto oversized = workspace / "oversized.rsp";
+    {
+        std::ofstream output(oversized, std::ios::binary);
+    }
+    std::filesystem::resize_file(oversized, 16U * 1024U * 1024U + 1U);
+    require_normalization_failure({"clang++", "@oversized.rsp"}, "exceed 16 MiB");
+}
+
+void test_command_normalization_fails_before_indexing() {
+    const auto fixture = std::filesystem::path(CXX_DEAD_FIXTURE_DIR);
+    auto commands = cxx_dead::load_compilation_database(fixture / "compile_commands.json");
+    require(commands.size() >= 2U, "normalization failure fixture needs two commands");
+    commands[1].arguments = {"unknown-launcher", "clang++", commands[1].file.string()};
+    const auto cache = cxx_dead::cache_temporary_path("-normalization-failure-cache");
+    try {
+        static_cast<void>(cxx_dead::ClangAstIndexer({
+                                                        .project_root = fixture,
+                                                        .cache_directory = cache,
+                                                    })
+                              .index(commands));
+        throw std::runtime_error("invalid launcher unexpectedly indexed");
+    } catch (const cxx_dead::IndexingError& error) {
+        require(error.diagnostics().state == cxx_dead::RunState::Incomplete &&
+                    !error.diagnostics().partial_graph_discarded &&
+                    error.diagnostics().translation_units.size() == commands.size() &&
+                    error.diagnostics().translation_units[0].status ==
+                        cxx_dead::TranslationUnitStatus::Skipped &&
+                    error.diagnostics().translation_units[1].status ==
+                        cxx_dead::TranslationUnitStatus::Failed &&
+                    error.diagnostics().translation_units[1].stage == "command_normalization",
+                "command normalization failure did not fail before indexing");
+    }
+    require(!std::filesystem::exists(cache),
+            "command normalization failure created cache state before indexing");
+}
+
 void test_graph_algorithms() {
     cxx_dead::Graph graph;
     const auto root = graph.add_or_merge_symbol({.key = "root",
@@ -418,7 +603,7 @@ void test_clang_integration() {
                                    indexed.diagnostics);
     const auto artifact_json = cxx_dead::json::parse(artifact_output.str());
     require(artifact_json.find("artifact_schema_version") != nullptr &&
-                artifact_json.find("artifact_schema_version")->as_number() == 6.0 &&
+                artifact_json.find("artifact_schema_version")->as_number() == 7.0 &&
                 artifact_json.find("identity_schema_version") != nullptr &&
                 artifact_json.find("identity_schema_version")->as_number() == 1.0,
             "graph artifact schema versions are missing or coupled to the report schema");
@@ -698,7 +883,7 @@ void test_callable_registration_integration() {
                                     .translation_units = indexed.translation_units},
                                    indexed.diagnostics);
     const auto artifact = cxx_dead::json::parse(artifact_output.str());
-    require(artifact.find("artifact_schema_version")->as_number() == 6.0 &&
+    require(artifact.find("artifact_schema_version")->as_number() == 7.0 &&
                 std::ranges::any_of(artifact.find("edges")->as_array(),
                                     [](const auto& edge) {
                                         return edge.string_or("kind") == "callback_registration";
@@ -837,7 +1022,7 @@ void test_yaml_provider_integration() {
                                     .translation_units = indexed.translation_units},
                                    indexed.diagnostics);
     const auto artifact = cxx_dead::json::parse(artifact_output.str());
-    require(artifact.find("artifact_schema_version")->as_number() == 6.0 &&
+    require(artifact.find("artifact_schema_version")->as_number() == 7.0 &&
                 artifact.find("suppressions")->as_array().size() == 1U,
             "graph artifact omitted provider suppressions");
 
@@ -1175,7 +1360,7 @@ void test_differential_analysis() {
                 !json_output.str().contains("\"confidence\""),
             "differential JSON omitted its schema or retained numeric confidence");
     std::ostringstream sarif_output;
-    cxx_dead::write_sarif_differential_report(sarif_output, report, "/workspace", "0.17.0");
+    cxx_dead::write_sarif_differential_report(sarif_output, report, "/workspace", "0.18.0");
     const auto sarif = cxx_dead::json::parse(sarif_output.str());
     const auto& sarif_run = sarif.find("runs")->as_array().front();
     require(sarif.string_or("version") == "2.1.0" &&
@@ -1271,14 +1456,14 @@ void test_differential_analysis() {
     std::filesystem::remove_all(workspace);
 
     auto corrupt = baseline_output.str();
-    const auto schema = corrupt.find("\"artifact_schema_version\": 6");
+    const auto schema = corrupt.find("\"artifact_schema_version\": 7");
     require(schema != std::string::npos, "baseline fixture omitted graph schema");
-    corrupt.replace(schema, std::string("\"artifact_schema_version\": 6").size(),
-                    "\"artifact_schema_version\": 5");
+    corrupt.replace(schema, std::string("\"artifact_schema_version\": 7").size(),
+                    "\"artifact_schema_version\": 6");
     try {
         std::istringstream invalid_input(corrupt);
         static_cast<void>(cxx_dead::read_graph_artifact(invalid_input));
-        throw std::runtime_error("schema-5 graph artifact unexpectedly loaded");
+        throw std::runtime_error("schema-6 graph artifact unexpectedly loaded");
     } catch (const std::exception& error) {
         require(std::string(error.what()).contains("unsupported artifact_schema_version"),
                 "unsupported graph artifact did not fail precisely");
@@ -1291,6 +1476,8 @@ int main() {
     try {
         test_json();
         test_shell_split();
+        test_compile_command_normalization();
+        test_command_normalization_fails_before_indexing();
         test_graph_algorithms();
         test_unreachable_aggregation();
         test_stable_identity_contract();

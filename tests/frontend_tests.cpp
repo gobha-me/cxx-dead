@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
@@ -286,6 +287,59 @@ void test_libtooling_incremental_cache() {
             "LibTooling cache reuse changed deterministic report output");
 }
 
+void test_normalized_command_frontend_parity() {
+    const auto source_fixture = std::filesystem::path(CXX_DEAD_CONSTRUCTION_FIXTURE_DIR);
+    const auto workspace = cxx_dead::cache_temporary_path("-normalized-command-parity");
+    struct Cleanup {
+        std::filesystem::path path;
+        ~Cleanup() {
+            std::error_code error;
+            std::filesystem::remove_all(path, error);
+        }
+    } cleanup{workspace};
+    std::filesystem::create_directories(workspace);
+    const auto source = workspace / "main.cpp";
+    std::filesystem::copy_file(source_fixture / "main.cpp", source);
+    {
+        std::ofstream response(workspace / "compile.rsp");
+        response << "-std=c++23 -c \"" << source.string() << "\" -o ignored.o -MF ignored.d";
+    }
+    const std::vector<cxx_dead::CompileCommand> commands{{
+        .directory = workspace,
+        .file = source,
+        .arguments = {"ccache", "sccache", "clang++-20", "@compile.rsp"},
+    }};
+    const cxx_dead::IndexOptions options{
+        .project_root = workspace,
+        .ast_filter = "construction_fixture",
+        .manual_roots = {"construction_fixture::run"},
+    };
+    const auto ast = cxx_dead::ClangAstIndexer(options).index(commands);
+    const auto tooling = cxx_dead::LibToolingIndexer(options).index(commands);
+    require(report_json(ast) == report_json(tooling),
+            "launcher/response normalization produced different frontend reports");
+    require(edge_facts(ast.graph) == edge_facts(tooling.graph),
+            "launcher/response normalization produced different frontend edges");
+
+    auto unsupported = commands;
+    unsupported.front().arguments = {"clang++", "-fcxx-dead-unsupported-option", "-c",
+                                     source.string()};
+    const auto require_clang_failure = [&](const auto& indexer) {
+        try {
+            static_cast<void>(indexer.index(unsupported));
+            throw std::runtime_error("unsupported compiler option unexpectedly indexed");
+        } catch (const cxx_dead::IndexingError& error) {
+            require(error.diagnostics().state == cxx_dead::RunState::Incomplete &&
+                        !error.diagnostics().partial_graph_discarded &&
+                        error.diagnostics().translation_units.size() == 1U &&
+                        error.diagnostics().translation_units.front().stage == "clang",
+                    "unsupported compiler option did not fail closed at Clang");
+        }
+    };
+    require_clang_failure(cxx_dead::ClangAstIndexer(options));
+    require_clang_failure(cxx_dead::LibToolingIndexer(options));
+}
+
 } // namespace
 
 int main() {
@@ -301,6 +355,7 @@ int main() {
         test_incomplete_libtooling_run_fails_closed();
         test_libtooling_hard_limits_are_explicitly_unsupported();
         test_libtooling_incremental_cache();
+        test_normalized_command_frontend_parity();
         std::cout << "all frontend parity tests passed\n";
         return 0;
     } catch (const std::exception& error) {

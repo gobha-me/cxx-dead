@@ -11,7 +11,6 @@
 #include <iterator>
 #include <optional>
 #include <ranges>
-#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <unordered_map>
@@ -923,45 +922,13 @@ void collect_uses(const Value& node, TranslationUnitState& state, std::optional<
     }
 }
 
-std::size_t compiler_argument_index(const std::vector<std::string>& arguments) {
-    for (std::size_t index = 0; index < arguments.size(); ++index) {
-        const auto name = std::filesystem::path(arguments[index]).filename().string();
-        if (name.find("clang") != std::string::npos || name == "c++" || name == "g++" ||
-            name == "gcc" || name == "cc") {
-            return index;
-        }
-    }
-    return 0;
-}
-
 std::vector<std::string>
 ast_command(const CompileCommand& command, const IndexOptions& options,
             const std::optional<std::filesystem::path>& dependency_file = std::nullopt) {
     std::vector<std::string> result{options.clang_executable};
-    const auto compiler_index = compiler_argument_index(command.arguments);
-    const std::set<std::string, std::less<>> flags_with_value{
-        "-o", "-MF", "-MT", "-MQ", "-MJ", "--serialize-diagnostics", "-dependency-file"};
-    const std::set<std::string, std::less<>> removed_flags{
-        "-c", "-S", "-E", "-MD", "-MMD", "-MP", "-MG", "-MM", "-M", "-emit-llvm"};
-
-    for (std::size_t index = compiler_index + 1U; index < command.arguments.size(); ++index) {
-        const auto& argument = command.arguments[index];
-        if (flags_with_value.contains(argument)) {
-            ++index;
-            continue;
-        }
-        if (removed_flags.contains(argument) || argument.starts_with("-o") ||
-            argument.starts_with("-MF") || argument.starts_with("-MT") ||
-            argument.starts_with("-MQ") || argument.starts_with("-MJ")) {
-            continue;
-        }
-        if (!argument.empty() && argument.front() != '-') {
-            const auto possible_file = absolute_normalized(argument, command.directory);
-            if (possible_file == command.file)
-                continue;
-        }
-        result.push_back(argument);
-    }
+    if (command.arguments.size() < 2U)
+        throw std::runtime_error("normalized compilation command omitted its source file");
+    result.insert(result.end(), command.arguments.begin() + 1, command.arguments.end() - 1);
     result.emplace_back("-Wno-error");
     result.emplace_back("-Xclang");
     result.emplace_back("-ast-dump=json");
@@ -1194,17 +1161,50 @@ IndexResult ClangAstIndexer::index(const std::vector<CompileCommand>& commands) 
                              .partial_graph_discarded = false,
                              .translation_units = {}});
     }
+    std::vector<CompileCommand> normalized_commands;
+    normalized_commands.reserve(commands.size());
+    for (std::size_t index = 0; index < commands.size(); ++index) {
+        try {
+            normalized_commands.push_back(normalize_compile_command(commands[index]));
+        } catch (const std::exception& error) {
+            RunDiagnostics diagnostics{
+                .state = RunState::Incomplete,
+                .frontend = result.frontend,
+                .partial_graph_discarded = false,
+                .translation_units = {},
+            };
+            for (std::size_t diagnostic_index = 0; diagnostic_index < commands.size();
+                 ++diagnostic_index) {
+                const bool failed = diagnostic_index == index;
+                diagnostics.translation_units.push_back({
+                    .file = commands[diagnostic_index].file,
+                    .status =
+                        failed ? TranslationUnitStatus::Failed : TranslationUnitStatus::Skipped,
+                    .stage = "command_normalization",
+                    .message =
+                        failed ? error.what() : "not indexed because command normalization failed",
+                    .exit_code = std::nullopt,
+                    .signal = std::nullopt,
+                });
+            }
+            throw IndexingError("could not normalize compilation command for " +
+                                    commands[index].file.string() + ": " + error.what(),
+                                std::move(diagnostics));
+        }
+    }
     std::unordered_map<std::string, RecordInfo> records;
     std::vector<bool> registration_rule_matches(options_.callback_registration_rules.size(), false);
     std::vector<StagedCacheWrite> staged_cache_writes;
     const auto index_started = std::chrono::steady_clock::now();
 
-    for (std::size_t command_index = 0; command_index < commands.size(); ++command_index) {
-        const auto& command = commands[command_index];
+    for (std::size_t command_index = 0; command_index < normalized_commands.size();
+         ++command_index) {
+        const auto& command = normalized_commands[command_index];
         const auto translation_unit_started = std::chrono::steady_clock::now();
         if (options_.cancellation_requested && options_.cancellation_requested()) {
-            fail_indexing(commands, result, command_index, TranslationUnitStatus::Cancelled,
-                          "indexing", "indexing cancelled before " + command.file.string());
+            fail_indexing(normalized_commands, result, command_index,
+                          TranslationUnitStatus::Cancelled, "indexing",
+                          "indexing cancelled before " + command.file.string());
         }
 
         std::string cache_key;
@@ -1220,23 +1220,23 @@ IndexResult ClangAstIndexer::index(const std::vector<CompileCommand>& commands) 
             result.cache_warnings.insert(result.cache_warnings.end(), cached.warnings.begin(),
                                          cached.warnings.end());
             if (options_.cancellation_requested && options_.cancellation_requested()) {
-                fail_indexing(commands, result, command_index, TranslationUnitStatus::Cancelled,
-                              "cache_validation",
+                fail_indexing(normalized_commands, result, command_index,
+                              TranslationUnitStatus::Cancelled, "cache_validation",
                               "indexing cancelled while validating cached facts for " +
                                   command.file.string());
             }
             if (options_.translation_unit_timeout.count() > 0 &&
                 std::chrono::steady_clock::now() - translation_unit_started >=
                     options_.translation_unit_timeout) {
-                fail_indexing(commands, result, command_index, TranslationUnitStatus::TimedOut,
-                              "cache_validation",
+                fail_indexing(normalized_commands, result, command_index,
+                              TranslationUnitStatus::TimedOut, "cache_validation",
                               "translation-unit timeout while validating cached facts for " +
                                   command.file.string());
             }
             if (options_.index_timeout.count() > 0 &&
                 std::chrono::steady_clock::now() - index_started >= options_.index_timeout) {
-                fail_indexing(commands, result, command_index, TranslationUnitStatus::TimedOut,
-                              "cache_validation",
+                fail_indexing(normalized_commands, result, command_index,
+                              TranslationUnitStatus::TimedOut, "cache_validation",
                               "index timeout while validating cached facts for " +
                                   command.file.string());
             }
@@ -1293,8 +1293,9 @@ IndexResult ClangAstIndexer::index(const std::vector<CompileCommand>& commands) 
             const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - index_started);
             if (elapsed >= options_.index_timeout) {
-                fail_indexing(commands, result, command_index, TranslationUnitStatus::TimedOut,
-                              "indexing", "index timeout reached before " + command.file.string());
+                fail_indexing(normalized_commands, result, command_index,
+                              TranslationUnitStatus::TimedOut, "indexing",
+                              "index timeout reached before " + command.file.string());
             }
             const auto remaining = options_.index_timeout - elapsed;
             if (!process_timeout.has_value() || remaining < *process_timeout) {
@@ -1316,22 +1317,25 @@ IndexResult ClangAstIndexer::index(const std::vector<CompileCommand>& commands) 
                                    .standard_output_limit = options_.max_ast_bytes,
                                    .cancellation_requested = options_.cancellation_requested});
         } catch (const std::exception& error) {
-            fail_indexing(commands, result, command_index, TranslationUnitStatus::Failed, "process",
+            fail_indexing(normalized_commands, result, command_index, TranslationUnitStatus::Failed,
+                          "process",
                           "could not run Clang AST indexing for " + command.file.string() + ": " +
                               error.what());
         }
         if (process.termination == ProcessTermination::TimedOut) {
-            fail_indexing(commands, result, command_index, TranslationUnitStatus::TimedOut, "clang",
+            fail_indexing(normalized_commands, result, command_index,
+                          TranslationUnitStatus::TimedOut, "clang",
                           timeout_scope + " timeout while indexing " + command.file.string(),
                           process.exit_code, process.signal);
         }
         if (process.termination == ProcessTermination::Cancelled) {
-            fail_indexing(commands, result, command_index, TranslationUnitStatus::Cancelled,
-                          "clang", "indexing cancelled while processing " + command.file.string(),
+            fail_indexing(normalized_commands, result, command_index,
+                          TranslationUnitStatus::Cancelled, "clang",
+                          "indexing cancelled while processing " + command.file.string(),
                           process.exit_code, process.signal);
         }
         if (process.termination == ProcessTermination::OutputLimitExceeded) {
-            fail_indexing(commands, result, command_index, TranslationUnitStatus::Failed,
+            fail_indexing(normalized_commands, result, command_index, TranslationUnitStatus::Failed,
                           "ast_output",
                           "Clang AST output exceeded --max-ast-bytes for " + command.file.string(),
                           process.exit_code, process.signal);
@@ -1340,8 +1344,8 @@ IndexResult ClangAstIndexer::index(const std::vector<CompileCommand>& commands) 
             const auto message = "Clang AST indexing failed for " + command.file.string() +
                                  " (exit " + std::to_string(process.exit_code) + "):\n" +
                                  concise_diagnostic(process.standard_error);
-            fail_indexing(commands, result, command_index, TranslationUnitStatus::Failed, "clang",
-                          message, process.exit_code, process.signal);
+            fail_indexing(normalized_commands, result, command_index, TranslationUnitStatus::Failed,
+                          "clang", message, process.exit_code, process.signal);
         }
         std::vector<std::string> translation_unit_diagnostics;
         if (options_.verbose && !process.standard_error.empty())
@@ -1385,27 +1389,28 @@ IndexResult ClangAstIndexer::index(const std::vector<CompileCommand>& commands) 
             for (const auto& ast : ast_documents)
                 collect_uses(ast, state, std::nullopt, false, false, false, command.file);
         } catch (const std::exception& error) {
-            fail_indexing(commands, result, command_index, TranslationUnitStatus::Failed,
+            fail_indexing(normalized_commands, result, command_index, TranslationUnitStatus::Failed,
                           "fact_collection",
                           "could not collect Clang AST facts for " + command.file.string() + ": " +
                               error.what());
         }
         if (options_.cancellation_requested && options_.cancellation_requested()) {
-            fail_indexing(commands, result, command_index, TranslationUnitStatus::Cancelled,
-                          "fact_collection",
+            fail_indexing(normalized_commands, result, command_index,
+                          TranslationUnitStatus::Cancelled, "fact_collection",
                           "indexing cancelled while collecting facts for " + command.file.string());
         }
         if (options_.translation_unit_timeout.count() > 0 &&
             std::chrono::steady_clock::now() - translation_unit_started >=
                 options_.translation_unit_timeout) {
-            fail_indexing(
-                commands, result, command_index, TranslationUnitStatus::TimedOut, "fact_collection",
-                "translation-unit timeout while collecting facts for " + command.file.string());
+            fail_indexing(normalized_commands, result, command_index,
+                          TranslationUnitStatus::TimedOut, "fact_collection",
+                          "translation-unit timeout while collecting facts for " +
+                              command.file.string());
         }
         if (options_.index_timeout.count() > 0 &&
             std::chrono::steady_clock::now() - index_started >= options_.index_timeout) {
-            fail_indexing(commands, result, command_index, TranslationUnitStatus::TimedOut,
-                          "fact_collection",
+            fail_indexing(normalized_commands, result, command_index,
+                          TranslationUnitStatus::TimedOut, "fact_collection",
                           "index timeout while collecting facts for " + command.file.string());
         }
         result.metrics.indexing_time += std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -1415,6 +1420,8 @@ IndexResult ClangAstIndexer::index(const std::vector<CompileCommand>& commands) 
             try {
                 auto dependencies = parse_make_dependencies(*dependency_file, command.directory);
                 dependencies.push_back(command.file);
+                dependencies.insert(dependencies.end(), command.command_inputs.begin(),
+                                    command.command_inputs.end());
                 TranslationUnitCacheEntry entry{
                     .graph = translation_unit_facts,
                     .diagnostics = translation_unit_diagnostics,
@@ -1449,7 +1456,7 @@ IndexResult ClangAstIndexer::index(const std::vector<CompileCommand>& commands) 
             result.metrics.merge_time += std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - merge_started);
         } catch (const std::exception& error) {
-            fail_indexing(commands, result, command_index, TranslationUnitStatus::Failed,
+            fail_indexing(normalized_commands, result, command_index, TranslationUnitStatus::Failed,
                           "fact_merge",
                           "could not merge Clang AST facts for " + command.file.string() + ": " +
                               error.what());

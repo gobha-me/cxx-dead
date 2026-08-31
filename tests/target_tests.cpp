@@ -203,7 +203,7 @@ int main() {
              .translation_units = production.commands.size()},
             production.diagnostics);
         const auto artifact_json = cxx_dead::json::parse(artifact_output.str());
-        require(artifact_json.find("artifact_schema_version")->as_number() == 6.0 &&
+        require(artifact_json.find("artifact_schema_version")->as_number() == 7.0 &&
                     artifact_json.find("analysis_context") != nullptr,
                 "graph artifact omitted target analysis context");
 

@@ -110,6 +110,19 @@ The default AST JSON frontend requires Clang at runtime: `cxx-dead` invokes `cla
 default, or the executable supplied with `--clang`. The optional LibTooling frontend uses the
 LLVM/Clang libraries linked into the binary instead of launching a compiler executable.
 
+Both frontends consume the same normalized compilation command. Direct Clang/GCC-style C++ drivers
+and simple chains of `ccache`, `sccache`, `distcc`, and `icecc` are supported. Wrapper options,
+command-local environment assignments, unsupported drivers, and malformed command inputs fail the
+run before any translation unit is indexed; cxx-dead never searches past unknown prefixes or
+evaluates a command through a shell.
+
+GNU/POSIX response files are expanded relative to the compilation-command directory, with a maximum
+nesting depth of 16 and 16 MiB of cumulative input per command. Missing, malformed, cyclic, deeper,
+or larger response inputs fail closed. Output and dependency-generation flags replaced by the
+analyzer are removed, while semantic compiler options remain. PCH, PCM, module-map, and response
+inputs are content-hashed for cache invalidation. An option unsupported by Clang remains visible to
+Clang and makes that translation unit incomplete rather than being silently discarded.
+
 ## Run
 
 Generate a compilation database for the application configuration under analysis. With CMake:
@@ -175,13 +188,13 @@ cxx-dead build/compile_commands.json --project-root . --no-cache
 ```
 
 Each entry is keyed by the normalized compilation command, frontend/tool identity, configuration,
-fact-affecting analysis options, selected compiler environment, and response-file contents. Before
-reuse, cxx-dead hashes every compiler-reported source, generated input, system header, module, or
-PCH dependency recorded by the prior run. A source change invalidates its TU; a shared-header
-change invalidates each consuming TU. Malformed, truncated, stale, or otherwise unreadable entries
-are ignored and rebuilt. Writes are staged beside the destination and published atomically only
-after the complete index passes provider/root validation. Cache warnings never supply partial
-facts or turn an incomplete analysis into a passing run. Deleting the cache is always safe.
+fact-affecting analysis options, selected compiler environment, and direct response/PCH/module
+inputs. Before reuse, cxx-dead hashes every compiler-reported source, generated input, system
+header, module, or PCH dependency recorded by the prior run. A source change invalidates its TU; a
+shared-header change invalidates each consuming TU. Malformed, truncated, stale, or otherwise
+unreadable entries are ignored and rebuilt. Writes are staged beside the destination and published
+atomically only after the complete index passes provider/root validation. Cache warnings never
+supply partial facts or turn an incomplete analysis into a passing run. Deleting the cache is always safe.
 
 JSON output for automation:
 
@@ -254,7 +267,7 @@ cxx-dead build/compile_commands.json \
   --output cxx-dead.sarif
 ```
 
-The baseline and current run must use graph artifact schema 6, identity schema 1, the same frontend,
+The baseline and current run must use graph artifact schema 7, identity schema 1, the same frontend,
 configuration ID, and selected target identity. Human and JSON differential reports include all
 `new_symbol`, `newly_unreachable`, `removed`, and `became_reachable` transitions for defined,
 reportable symbols. A new symbol is reported whether reachable or unreachable, but only an

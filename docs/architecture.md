@@ -39,7 +39,9 @@ command normalization ---------------------------> AST JSON subprocess ----+
 
 ## Modules
 
-- `compile_database` parses both `arguments` and shell-quoted `command` entries.
+- `compile_database` parses both `arguments` and shell-quoted `command` entries, expands bounded
+  GNU/POSIX response files, strips only replaced output/dependency behavior, and produces the shared
+  fail-closed command consumed by both frontends and the cache.
 - `build_model` parses CMake File API codemodel-v2 replies or schema-versioned explicit manifests,
   resolves a selected target's link closure, and maps its C++ sources back to compile commands.
 - `process` runs Clang directly with `fork`/`execvp`, captures stdout/stderr concurrently, applies
@@ -185,8 +187,9 @@ version 9 separated actionable and provider-suppressed findings while retaining 
 provenance; version 8 added callable/provider provenance; version 7 added run state and
 translation-unit diagnostics, while version 6 added
 analysis configuration and target context, version 5 exposed stable keys, and version 4 introduced
-spelling and expansion extents. Graph artifact schema 6 records the project-owned global-root
-semantics and deliberately rejects schema-5 baselines; schema 5 added public API roots; schema 4 added
+spelling and expansion extents. Graph artifact schema 7 records the shared normalized-command
+extraction contract and deliberately rejects schema-6 baselines; schema 6 added project-owned
+global-root semantics; schema 5 added public API roots; schema 4 added
 general provider facts and suppressions; schema 3 added callable registration and escape facts;
 schema 2 added target context.
 Identity schema 1 remains independently versioned. Differential schema 2 is independent from both.
@@ -206,7 +209,7 @@ AST JSON subprocesses run in their own process groups; a wall-time limit, output
 
 ## Run states
 
-JSON report schema 11 carries these run states and the status of every selected translation unit:
+JSON report schema 12 carries these run states and the status of every selected translation unit:
 
 - **complete**: every selected translation unit produced parseable AST facts and at least one
   context-appropriate root was found. Only a complete run may emit findings or return policy status
@@ -230,8 +233,10 @@ conservatively.
 
 ## Security boundary
 
-Commands are passed as argument arrays, not shell strings. Existing output and dependency flags
-are removed before the AST frontend adds its own syntax-only dependency manifest. As with normal
-builds, the compilation database and project-local cache are trusted inputs: response files,
-compiler plugins, and paths can still cause Clang to load repository-selected content. Cache data
-is schema-checked and cannot bypass dependency-content validation; corrupt entries are rebuilt.
+Commands are passed as argument arrays, not shell strings. Known simple launcher chains are removed,
+bounded GNU/POSIX response files are expanded, and existing output/dependency flags are removed
+before either frontend adds syntax-only behavior. Unknown prefixes and command-local environment
+assignments fail before indexing. As with normal builds, the compilation database and project-local
+cache are trusted inputs: compiler plugins and paths can still cause Clang to load
+repository-selected content. Direct response/PCH/module inputs and compiler-reported dependencies
+are content-hashed; schema-checked cache data cannot bypass that validation.

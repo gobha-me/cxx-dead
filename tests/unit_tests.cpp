@@ -416,7 +416,7 @@ void test_clang_integration() {
                                    indexed.diagnostics);
     const auto artifact_json = cxx_dead::json::parse(artifact_output.str());
     require(artifact_json.find("artifact_schema_version") != nullptr &&
-                artifact_json.find("artifact_schema_version")->as_number() == 5.0 &&
+                artifact_json.find("artifact_schema_version")->as_number() == 6.0 &&
                 artifact_json.find("identity_schema_version") != nullptr &&
                 artifact_json.find("identity_schema_version")->as_number() == 1.0,
             "graph artifact schema versions are missing or coupled to the report schema");
@@ -530,6 +530,20 @@ void test_implicit_construction_integration() {
          }) {
         require(reachability.reachable[find_symbol(indexed.graph, name)],
                 "construction or cleanup path was not retained");
+    }
+    for (const auto name : {
+             "construction_fixture::GlobalProduct::GlobalProduct",
+             "construction_fixture::GlobalProduct::~GlobalProduct",
+         }) {
+        const auto symbol = find_symbol(indexed.graph, name);
+        require(reachability.reachable[symbol] &&
+                    std::ranges::any_of(indexed.graph.roots(),
+                                        [&](const cxx_dead::Root& root) {
+                                            return root.symbol == symbol &&
+                                                   root.kind ==
+                                                       cxx_dead::RootKind::GlobalInitializer;
+                                        }),
+                "project-owned global object lifetime was not retained as root evidence");
     }
     for (const auto name : {
              "construction_fixture::NonFactoryProduct::NonFactoryProduct",
@@ -681,7 +695,7 @@ void test_callable_registration_integration() {
                                     .translation_units = indexed.translation_units},
                                    indexed.diagnostics);
     const auto artifact = cxx_dead::json::parse(artifact_output.str());
-    require(artifact.find("artifact_schema_version")->as_number() == 5.0 &&
+    require(artifact.find("artifact_schema_version")->as_number() == 6.0 &&
                 std::ranges::any_of(artifact.find("edges")->as_array(),
                                     [](const auto& edge) {
                                         return edge.string_or("kind") == "callback_registration";
@@ -770,13 +784,23 @@ void test_yaml_provider_integration() {
     const auto plugin_entry = find_symbol(indexed.graph, "provider_fixture::plugin_entry");
     const auto plugin_leaf = find_symbol(indexed.graph, "provider_fixture::plugin_leaf");
     const auto registered = find_symbol(indexed.graph, "provider_fixture::registered_callback");
+    const auto global_registered =
+        find_symbol(indexed.graph, "provider_fixture::global_registered_callback");
     const auto escaped = find_symbol(indexed.graph, "provider_fixture::escaped_callback");
     const auto suppressed = find_symbol(indexed.graph, "provider_fixture::suppressed_callback");
     const auto ordinary = find_symbol(indexed.graph, "provider_fixture::ordinary_dead");
     require(reachability.provider_reachable[plugin_entry] &&
                 reachability.provider_reachable[plugin_leaf] &&
-                reachability.provider_reachable[registered],
+                reachability.provider_reachable[registered] &&
+                reachability.provider_reachable[global_registered],
             "provider root, edge, or callback registration did not retain its target");
+    require(std::ranges::any_of(indexed.graph.roots(),
+                                [&](const cxx_dead::Root& root) {
+                                    return root.symbol == global_registered &&
+                                           root.kind == cxx_dead::RootKind::CallbackRegistration &&
+                                           root.evidence.provider == "project_policy";
+                                }),
+            "project-owned global callback registration did not retain root evidence");
     require(!reachability.reachable[escaped] && !reachability.reachable[suppressed] &&
                 !reachability.reachable[ordinary],
             "non-root provider facts unexpectedly changed reachability");
@@ -810,7 +834,7 @@ void test_yaml_provider_integration() {
                                     .translation_units = indexed.translation_units},
                                    indexed.diagnostics);
     const auto artifact = cxx_dead::json::parse(artifact_output.str());
-    require(artifact.find("artifact_schema_version")->as_number() == 5.0 &&
+    require(artifact.find("artifact_schema_version")->as_number() == 6.0 &&
                 artifact.find("suppressions")->as_array().size() == 1U,
             "graph artifact omitted provider suppressions");
 
@@ -1211,14 +1235,14 @@ void test_differential_analysis() {
     std::filesystem::remove_all(workspace);
 
     auto corrupt = baseline_output.str();
-    const auto schema = corrupt.find("\"artifact_schema_version\": 5");
+    const auto schema = corrupt.find("\"artifact_schema_version\": 6");
     require(schema != std::string::npos, "baseline fixture omitted graph schema");
-    corrupt.replace(schema, std::string("\"artifact_schema_version\": 5").size(),
-                    "\"artifact_schema_version\": 99");
+    corrupt.replace(schema, std::string("\"artifact_schema_version\": 6").size(),
+                    "\"artifact_schema_version\": 5");
     try {
         std::istringstream invalid_input(corrupt);
         static_cast<void>(cxx_dead::read_graph_artifact(invalid_input));
-        throw std::runtime_error("unsupported graph artifact unexpectedly loaded");
+        throw std::runtime_error("schema-5 graph artifact unexpectedly loaded");
     } catch (const std::exception& error) {
         require(std::string(error.what()).contains("unsupported artifact_schema_version"),
                 "unsupported graph artifact did not fail precisely");

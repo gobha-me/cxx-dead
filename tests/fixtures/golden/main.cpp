@@ -90,6 +90,8 @@ int unused_initializer_like() {
     return 0;
 }
 
+void excluded_initializer_target() {}
+
 int initialized_value = initialize_global();
 
 #define DEFINE_FUNCTION(name)                                                                      \

@@ -66,6 +66,10 @@ void test_scope_separation() {
     const auto callback = find_symbol(indexed.graph, "NullVectorApp::on_start");
     const auto live_helper = find_symbol(indexed.graph, "live_helper");
     const auto dead_helper = find_symbol(indexed.graph, "dead_helper");
+    const auto indexed_initializer = find_symbol(indexed.graph, "indexed_initializer_target");
+    const auto external_initializer = find_symbol(indexed.graph, "external_initializer_target");
+    const auto local_initializer = find_symbol(indexed.graph, "local_static_initializer_target");
+    const auto local_owner = find_symbol(indexed.graph, "unused_local_static_owner");
     const auto external = find_symbol(indexed.graph, "external_api");
 
     require(indexed.graph.symbols()[framework_run].scope == cxx_dead::SymbolScope::Indexed &&
@@ -81,11 +85,21 @@ void test_scope_separation() {
             "framework virtual dispatch did not reach the application callback cascade");
     require(!reachability.reachable[dead_helper] && find_finding(report, dead_helper) != nullptr,
             "unreachable reportable helper should remain a finding");
+    require(reachability.reachable[indexed_initializer] &&
+                find_finding(report, indexed_initializer) == nullptr,
+            "indexed non-reportable initializer should retain its reportable target");
+    require(!reachability.reachable[external_initializer] &&
+                find_finding(report, external_initializer) != nullptr,
+            "external initializer should not retain a project-owned target");
+    require(!reachability.reachable[local_owner] && !reachability.reachable[local_initializer] &&
+                find_finding(report, local_owner) != nullptr &&
+                find_finding(report, local_initializer) != nullptr,
+            "function-local static initializer should remain conditional on its owner");
     require(indexed.graph.symbols()[external].scope == cxx_dead::SymbolScope::ExternalOpaque &&
                 reachability.reachable[external] && !indexed.graph.symbols()[external].defined &&
                 find_finding(report, external) == nullptr,
             "external reference should be a reachable opaque terminal");
-    require(report.findings.size() == 1U && report.indexed_symbols >= 2U &&
+    require(report.findings.size() == 4U && report.indexed_symbols >= 2U &&
                 report.external_opaque_symbols == 1U,
             "scope-separated report has unexpected candidates or scope counts");
 
@@ -99,8 +113,12 @@ void test_scope_separation() {
                 scope_counts->find("indexed")->as_number() >= 2.0,
             "JSON report does not expose stable-identity scope counts");
     const auto& findings = json_report.find("findings")->as_array();
-    require(findings.size() == 1U && findings.front().string_or("scope") == "reportable",
-            "JSON finding does not identify report ownership");
+    require(findings.size() == 4U && std::ranges::all_of(findings,
+                                                         [](const auto& finding) {
+                                                             return finding.string_or("scope") ==
+                                                                    "reportable";
+                                                         }),
+            "JSON findings do not identify report ownership");
     const auto& roots = json_report.find("roots")->as_array();
     require(!roots.empty() && roots.front().string_or("scope") == "reportable",
             "JSON root does not identify symbol scope");

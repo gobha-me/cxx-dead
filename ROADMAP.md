@@ -5,8 +5,9 @@ until the prototype has stable performance and precision measurements.
 
 ## M1 — Application-mode hardening
 
-Status: v0.15.0 adds topology-first unreachable component aggregation above the v0.10.0 callable
-foundation. Macro and broader language-modeling work remain open.
+Status: v0.16.0 limits automatic global-initializer roots to project-owned code in the selected
+link model, above the v0.15.0 topology and v0.10.0 callable foundations. Macro and broader
+language-modeling work remain open.
 
 - Separate symbols needed for graph traversal from project-owned symbols eligible for reporting.
 - Represent roots, escapes, and classifications as structured evidence.
@@ -14,6 +15,7 @@ foundation. Macro and broader language-modeling work remain open.
   completed in v0.9.0)
 - Improve lambda, callable, macro, and source-range coverage. (initial callable and registration
   coverage completed in v0.10.0)
+- Limit global-initializer roots to project-owned linked definitions. (completed in v0.16.0)
 - Aggregate unreachable SCCs with type/file/directory ownership hints. (completed in v0.15.0)
 - Add resource limits and explicit incomplete-run diagnostics. (completed in v0.8.0)
 - Expand the golden fixture corpus and reviewed real-project result ledger.

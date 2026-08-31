@@ -6,6 +6,10 @@ void registrar(Callback) {}
 
 void registered_callback() {}
 
+void global_registered_callback() {}
+
+int global_registration = (registrar(&global_registered_callback), 1);
+
 void run_registration() {
     registrar(&registered_callback);
 }

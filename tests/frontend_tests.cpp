@@ -193,6 +193,20 @@ void test_provider_frontend_parity() {
             "provider LibTooling edges differ from AST JSON edges\nAST:" +
                 joined(edge_facts(ast.graph)) +
                 "\nLibTooling:" + joined(edge_facts(tooling.graph)));
+    const auto global_callback =
+        std::ranges::find_if(ast.graph.symbols(), [](const cxx_dead::Symbol& symbol) {
+            return symbol.qualified_name == "provider_fixture::global_registered_callback";
+        });
+    require(global_callback != ast.graph.symbols().end(),
+            "provider fixture omitted the global callback symbol");
+    const auto global_callback_id = static_cast<cxx_dead::SymbolId>(
+        std::distance(ast.graph.symbols().begin(), global_callback));
+    require(std::ranges::any_of(ast.graph.roots(),
+                                [&](const cxx_dead::Root& root) {
+                                    return root.symbol == global_callback_id &&
+                                           root.kind == cxx_dead::RootKind::CallbackRegistration;
+                                }),
+            "global callback registration did not produce root evidence");
 }
 
 void test_exclusion_frontend_parity() {

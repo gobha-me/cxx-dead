@@ -101,13 +101,14 @@ API roots, and a pure interface target without consumer compilation context fail
 The provider corpus covers exact YAML roots, a dynamic edge, callback registration, escape
 evidence, and an auditable suppression. Provider roots and edges retain only their configured
 targets, callback registration requires a reachable registration subsystem, escape evidence lowers
-confidence without creating reachability, and suppression removes one candidate from policy while
+the classification to `dynamically_referenced` without creating reachability, and suppression
+removes one candidate from policy while
 preserving its original classification. Unconfigured, unmatched, ambiguous, invalid-schema, and
 provider-file-order controls are asserted directly.
 
 The differential CLI corpus compares the same provider fixture with and without configured dynamic
 reachability. It reports three `newly_unreachable` transitions, selects the two `likely_dead`
-high-confidence transitions under schema-1 policy, excludes the dynamically referenced callback,
+transitions under the legacy schema-1 policy, excludes the dynamically referenced callback,
 and emits exactly those two current source locations in SARIF. A malformed incomplete-run document
 used as a baseline fails with status 1 rather than producing an empty passing comparison.
 

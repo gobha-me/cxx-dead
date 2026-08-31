@@ -44,6 +44,9 @@ The baseline and current runs used the same target and resource arguments:
 The baseline wrote `baseline.graph.json`. The current run supplied that artifact with the existing
 schema-1 high-confidence policy and `--fail-on-diff`:
 
+> This records the v0.15.1 trial input. v0.17.0 rejects schema-1 differential policies and uses
+> schema 2 symbolic classification filters without `minimum_confidence`.
+
 ```yaml
 schema_version: 1
 changes: [new_symbol, newly_unreachable]

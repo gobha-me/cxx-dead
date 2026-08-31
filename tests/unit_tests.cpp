@@ -294,9 +294,10 @@ void test_unreachable_aggregation() {
     std::ostringstream output;
     cxx_dead::write_json_report(output, graph, reachability, report, {});
     const auto json = cxx_dead::json::parse(output.str());
-    require(json.find("schema_version")->as_number() == 11.0 &&
-                json.find("unreachable_components")->as_array().size() == 3U,
-            "schema-11 JSON omitted unreachable component aggregates");
+    require(json.find("schema_version")->as_number() == 12.0 &&
+                json.find("unreachable_components")->as_array().size() == 3U &&
+                !output.str().contains("\"confidence\""),
+            "schema-12 JSON omitted aggregates or retained numeric confidence");
     require(
         std::ranges::any_of(json.find("unreachable_components")->as_array(),
                             [](const auto& component) {
@@ -309,8 +310,9 @@ void test_unreachable_aggregation() {
     const auto finding = std::ranges::find_if(
         findings, [](const auto& item) { return item.string_or("key") == "feature-a"; });
     require(finding != findings.end() && finding->find("component") != nullptr &&
-                finding->find("weak_component") != nullptr,
-            "flat finding did not link to both SCC and weak-component evidence");
+                finding->find("weak_component") != nullptr &&
+                finding->find("confidence") == nullptr,
+            "flat finding did not preserve symbolic-only component evidence");
 }
 
 void test_stable_identity_contract() {
@@ -400,8 +402,8 @@ void test_clang_integration() {
     const auto report_json = cxx_dead::json::parse(json_output.str());
     require(report_json.find("findings") != nullptr, "JSON report has no findings field");
     require(report_json.find("schema_version") != nullptr &&
-                report_json.find("schema_version")->as_number() == 11.0,
-            "JSON report does not use aggregation schema version 11");
+                report_json.find("schema_version")->as_number() == 12.0,
+            "JSON report does not use symbolic-policy schema version 12");
     require(report_json.find("roots") != nullptr && report_json.find("roots")->is_array(),
             "JSON report has no structured roots field");
     require(report_json.find("run") != nullptr &&
@@ -467,8 +469,9 @@ void test_clang_integration() {
     cxx_dead::write_human_report(human_output, indexed.graph, reachability, report,
                                  indexed.diagnostics, indexed_metadata);
     require(human_output.str().contains("ROOTS") &&
-                human_output.str().contains("[escape] clang_ast"),
-            "human report does not expose root and escape evidence");
+                human_output.str().contains("[escape] clang_ast") &&
+                !human_output.str().contains("Confidence:"),
+            "human report does not expose symbolic-only root and escape evidence");
 
     const cxx_dead::ClangAstIndexer filtered_indexer({
         .project_root = fixture,
@@ -645,7 +648,7 @@ void test_callable_registration_integration() {
         });
     require(escaped_finding != report.findings.end() &&
                 escaped_finding->classification == cxx_dead::Classification::DynamicallyReferenced,
-            "ambiguous std::function target received a high-confidence classification");
+            "ambiguous std::function target received an actionable dead classification");
     require(unreachable_finding != report.findings.end() &&
                 unreachable_finding->classification ==
                     cxx_dead::Classification::DynamicallyReferenced,
@@ -661,7 +664,7 @@ void test_callable_registration_integration() {
     require(escaped_lambda_finding != report.findings.end() &&
                 escaped_lambda_finding->classification ==
                     cxx_dead::Classification::DynamicallyReferenced,
-            "ambiguous lambda escape received a high-confidence classification");
+            "ambiguous lambda escape received an actionable dead classification");
     require(unused_lambda_finding != report.findings.end() &&
                 unused_lambda_finding->classification !=
                     cxx_dead::Classification::DynamicallyReferenced,
@@ -673,7 +676,7 @@ void test_callable_registration_integration() {
             });
         require(finding != report.findings.end() &&
                     finding->classification == cxx_dead::Classification::DynamicallyReferenced,
-                "reassigned function-pointer target received a high-confidence classification");
+                "reassigned function-pointer target received an actionable dead classification");
     }
     require(report.provider_reachable.size() == 2U &&
                 report.provider_reachable_symbols >= report.provider_reachable.size(),
@@ -808,7 +811,7 @@ void test_yaml_provider_integration() {
         report.findings, [&](const auto& finding) { return finding.symbol == escaped; });
     require(escaped_finding != report.findings.end() &&
                 escaped_finding->classification == cxx_dead::Classification::DynamicallyReferenced,
-            "provider escape did not lower finding confidence");
+            "provider escape did not select the conservative symbolic classification");
     require(
         std::ranges::none_of(report.findings,
                              [&](const auto& finding) { return finding.symbol == suppressed; }) &&
@@ -822,7 +825,7 @@ void test_yaml_provider_integration() {
     cxx_dead::write_json_report(report_output, indexed.graph, reachability, report,
                                 indexed.diagnostics);
     const auto report_json = cxx_dead::json::parse(report_output.str());
-    require(report_json.find("schema_version")->as_number() == 11.0 &&
+    require(report_json.find("schema_version")->as_number() == 12.0 &&
                 report_json.find("suppressed_findings")->as_array().size() == 1U &&
                 report_json.find("summary")->find("suppressed_symbols")->as_number() == 1.0,
             "provider report schema omitted auditable suppressions");
@@ -1155,36 +1158,45 @@ void test_differential_analysis() {
                 !suppressed->policy_match,
             "suppressed differential finding became actionable");
 
+    std::ostringstream human_output;
+    cxx_dead::write_human_differential_report(human_output, report);
+    require(human_output.str().contains("  Current: ") &&
+                !human_output.str().contains("Current: dead (") &&
+                !human_output.str().contains("Current: likely_dead (") &&
+                !human_output.str().contains("Current: possibly_dead (") &&
+                !human_output.str().contains("Current: dynamically_referenced ("),
+            "human differential report retained numeric confidence");
+
     std::ostringstream json_output;
     cxx_dead::write_json_differential_report(json_output, report);
     const auto json = cxx_dead::json::parse(json_output.str());
-    require(json.find("diff_schema_version")->as_number() == 1.0 &&
-                json.find("changes")->as_array().size() == report.changes.size(),
-            "differential JSON omitted its schema or transitions");
+    require(json.find("diff_schema_version")->as_number() == 2.0 &&
+                json.find("changes")->as_array().size() == report.changes.size() &&
+                !json_output.str().contains("\"confidence\""),
+            "differential JSON omitted its schema or retained numeric confidence");
     std::ostringstream sarif_output;
-    cxx_dead::write_sarif_differential_report(sarif_output, report, "/workspace", "0.15.0");
+    cxx_dead::write_sarif_differential_report(sarif_output, report, "/workspace", "0.17.0");
     const auto sarif = cxx_dead::json::parse(sarif_output.str());
     const auto& sarif_run = sarif.find("runs")->as_array().front();
     require(sarif.string_or("version") == "2.1.0" &&
                 sarif_run.find("results")->as_array().size() == report.policy_matches &&
-                sarif_output.str().contains("new_dead.cpp"),
-            "SARIF did not contain exactly the policy-matching repository locations");
+                sarif_output.str().contains("new_dead.cpp") &&
+                !sarif_output.str().contains("\"confidence\""),
+            "SARIF did not preserve symbolic-only policy-matching locations");
 
     const auto workspace = cxx_dead::cache_temporary_path("-diff-policy-test");
     std::filesystem::create_directories(workspace);
     const auto policy_path = workspace / "policy.yaml";
     {
         std::ofstream output(policy_path);
-        output << "schema_version: 1\n"
+        output << "schema_version: 2\n"
                   "changes: [new_symbol, newly_unreachable]\n"
                   "classifications: [dead, likely_dead]\n"
-                  "targets: [production_app]\n"
-                  "minimum_confidence: 0.95\n";
+                  "targets: [production_app]\n";
     }
     const auto loaded = cxx_dead::load_differential_policy(policy_path);
     require(loaded.changes.size() == 2U && loaded.classifications.size() == 2U &&
-                loaded.targets == std::vector<std::string>{"production_app"} &&
-                loaded.minimum_confidence == 0.95,
+                loaded.targets == std::vector<std::string>{"production_app"},
             "differential policy did not load its filters");
     auto target_baseline = baseline;
     target_baseline.metadata.target_id = "production-id";
@@ -1223,7 +1235,7 @@ void test_differential_analysis() {
     const auto invalid_path = workspace / "invalid.yaml";
     {
         std::ofstream output(invalid_path);
-        output << "schema_version: 1\nchanges: []\n";
+        output << "schema_version: 2\nchanges: []\n";
     }
     try {
         static_cast<void>(cxx_dead::load_differential_policy(invalid_path));
@@ -1231,6 +1243,30 @@ void test_differential_analysis() {
     } catch (const std::exception& error) {
         require(std::string(error.what()).contains("non-empty sequence"),
                 "invalid differential policy did not fail precisely");
+    }
+    const auto legacy_path = workspace / "legacy.yaml";
+    {
+        std::ofstream output(legacy_path);
+        output << "schema_version: 1\n";
+    }
+    try {
+        static_cast<void>(cxx_dead::load_differential_policy(legacy_path));
+        throw std::runtime_error("schema-1 differential policy unexpectedly loaded");
+    } catch (const std::exception& error) {
+        require(std::string(error.what()).contains("unsupported differential schema_version 1"),
+                "legacy differential policy did not fail closed");
+    }
+    const auto numeric_path = workspace / "numeric.yaml";
+    {
+        std::ofstream output(numeric_path);
+        output << "schema_version: 2\nminimum_confidence: 0.95\n";
+    }
+    try {
+        static_cast<void>(cxx_dead::load_differential_policy(numeric_path));
+        throw std::runtime_error("numeric differential policy unexpectedly loaded");
+    } catch (const std::exception& error) {
+        require(std::string(error.what()).contains("unknown key 'minimum_confidence'"),
+                "numeric differential policy did not fail closed");
     }
     std::filesystem::remove_all(workspace);
 

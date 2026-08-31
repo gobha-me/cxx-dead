@@ -66,10 +66,12 @@ command normalization ---------------------------> AST JSON subprocess ----+
   artifact and identity schemas. Ingestion rejects unknown schema versions, malformed facts,
   dangling references, identity mismatches, and incomplete report documents.
 - `differential` compares current and baseline reportable definitions by stable ID, applies a strict
-  schema-versioned YAML policy, and writes deterministic human, JSON, or policy-only SARIF 2.1.0.
-- `report` applies typed evidence classifications, derives topology-preserving type/file/directory
-  summaries and non-overlapping estimated LOC, and writes terminal or schema-versioned JSON evidence
-  chains. Ownership hints never alter topology, classification, suppression, or policy gating.
+  symbolic-classification YAML policy, and writes deterministic human, JSON, or policy-only SARIF
+  2.1.0 without uncalibrated confidence scores.
+- `report` applies symbolic typed-evidence classifications, derives topology-preserving
+  type/file/directory summaries and non-overlapping estimated LOC, and writes terminal or
+  schema-versioned JSON evidence chains. Ownership hints never alter topology, classification,
+  suppression, or policy gating.
 - `json` is a small standards-oriented parser/escaper used for both Clang and compilation database input, avoiding a prototype package dependency.
 
 Each translation unit is merged as a separate neutral graph fact batch, so neither frontend needs
@@ -100,7 +102,7 @@ Traversed edges:
 `Constructs` edges identify selected direct constructors, corresponding destructors, observed
 base/member initialization, and conservative smart-pointer factory lifetime effects. An
 unrecognized helper returning `unique_ptr<T>` or `shared_ptr<T>` retains `T` rather than emitting a
-high-confidence false positive and adds a deterministic diagnostic naming the helper.
+`dead` or `likely_dead` false positive and adds a deterministic diagnostic naming the helper.
 
 Non-traversed escape facts:
 
@@ -175,9 +177,10 @@ the expansion extent is primary when present and spelling is primary otherwise.
 
 Clang omits repeated file and line fields in nested JSON nodes. The indexer resolves those omissions
 from traversal context and a cached per-file byte-offset line map rather than emitting line zero.
-JSON report schema version 11 adds the unreachable condensation DAG, weak-component ownership
-summaries, stable-key backlinks, and estimated LOC; version 10 added public API, internal-live, and
-internal-unreachable classes;
+JSON report schema version 12 removes uncalibrated numeric confidence while retaining symbolic
+classifications and evidence; version 11 added the unreachable condensation DAG, weak-component
+ownership summaries, stable-key backlinks, and estimated LOC; version 10 added public API,
+internal-live, and internal-unreachable classes;
 version 9 separated actionable and provider-suppressed findings while retaining suppression
 provenance; version 8 added callable/provider provenance; version 7 added run state and
 translation-unit diagnostics, while version 6 added
@@ -186,9 +189,9 @@ spelling and expansion extents. Graph artifact schema 6 records the project-owne
 semantics and deliberately rejects schema-5 baselines; schema 5 added public API roots; schema 4 added
 general provider facts and suppressions; schema 3 added callable registration and escape facts;
 schema 2 added target context.
-Identity schema 1 remains independently versioned.
-Differential schema 1 is independent from both. It records `new_symbol`, `newly_unreachable`,
-`removed`, and `became_reachable` transitions plus baseline/current reachability, classification,
+Identity schema 1 remains independently versioned. Differential schema 2 is independent from both.
+It removes numeric confidence and records `new_symbol`, `newly_unreachable`, `removed`, and
+`became_reachable` transitions plus baseline/current reachability, symbolic classification,
 suppression, and policy-match state.
 
 ## Failure model

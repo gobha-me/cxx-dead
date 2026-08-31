@@ -6,9 +6,7 @@
 
 #include <algorithm>
 #include <cctype>
-#include <cmath>
 #include <fstream>
-#include <iomanip>
 #include <map>
 #include <set>
 #include <stdexcept>
@@ -123,7 +121,6 @@ DifferentialSymbolState symbol_state(const Graph& graph, const ReachabilityResul
     if (lookup.finding == nullptr)
         return result;
     result.classification = lookup.finding->classification;
-    result.confidence = lookup.finding->confidence;
     result.suppressed = lookup.suppressed != nullptr;
     if (lookup.suppressed != nullptr)
         result.suppressions = lookup.suppressed->suppressions;
@@ -155,8 +152,7 @@ bool policy_matches(const DifferentialPolicy& policy, const GraphArtifactMetadat
     if (std::ranges::find(policy.changes, change.kind) == policy.changes.end() ||
         change.current.suppressed || !change.current.classification.has_value() ||
         std::ranges::find(policy.classifications, *change.current.classification) ==
-            policy.classifications.end() ||
-        change.current.confidence < policy.minimum_confidence) {
+            policy.classifications.end()) {
         return false;
     }
     return policy.targets.empty() ||
@@ -204,11 +200,6 @@ void write_state(std::ostream& output, const DifferentialSymbolState& state) {
            << ", \"classification\": ";
     if (state.classification.has_value())
         output << '"' << to_string(*state.classification) << '"';
-    else
-        output << "null";
-    output << ", \"confidence\": ";
-    if (state.classification.has_value())
-        output << state.confidence;
     else
         output << "null";
     output << ", \"evidence\": [";
@@ -284,9 +275,8 @@ DifferentialPolicy load_differential_policy(const std::filesystem::path& path) {
     } catch (const YAML::Exception& error) {
         throw std::runtime_error(path.string() + ": invalid YAML: " + error.what());
     }
-    require_policy_mapping(
-        root, {"schema_version", "changes", "classifications", "targets", "minimum_confidence"},
-        path, "document");
+    require_policy_mapping(root, {"schema_version", "changes", "classifications", "targets"}, path,
+                           "document");
     const auto version_node = root["schema_version"];
     if (!version_node)
         throw std::runtime_error(path.string() + ": document requires 'schema_version'");
@@ -330,19 +320,6 @@ DifferentialPolicy load_differential_policy(const std::filesystem::path& path) {
                                          " contains duplicate value '" + target + "'");
             }
             policy.targets.push_back(target);
-        }
-    }
-    if (root["minimum_confidence"]) {
-        try {
-            policy.minimum_confidence = root["minimum_confidence"].as<double>();
-        } catch (const YAML::Exception&) {
-            throw std::runtime_error(policy_context(path, "minimum_confidence") +
-                                     " must be a number from 0 to 1");
-        }
-        if (!std::isfinite(policy.minimum_confidence) || policy.minimum_confidence < 0.0 ||
-            policy.minimum_confidence > 1.0) {
-            throw std::runtime_error(policy_context(path, "minimum_confidence") +
-                                     " must be a number from 0 to 1");
         }
     }
     return policy;
@@ -480,8 +457,7 @@ void write_human_differential_report(std::ostream& output, const DifferentialRep
             output << "  Location: " << location.file.string() << ':' << location.line << ':'
                    << location.column << '\n';
         if (change.current.classification.has_value()) {
-            output << "  Current: " << to_string(*change.current.classification) << " ("
-                   << change.current.confidence << ')';
+            output << "  Current: " << to_string(*change.current.classification);
             if (change.current.suppressed)
                 output << " [suppressed]";
             output << '\n';
@@ -557,7 +533,7 @@ void write_sarif_differential_report(std::ostream& output, const DifferentialRep
                << "\"}, \"partialFingerprints\": {\"cxxDeadSymbolId/v1\": \""
                << json::escape(change.symbol.key) << "\"}, \"properties\": {\"change\": \""
                << to_string(change.kind) << "\", \"classification\": \"" << classification
-               << "\", \"confidence\": " << change.current.confidence << ", \"target\": ";
+               << "\", \"target\": ";
         write_nullable_string(output, report.current.target_name);
         output << '}';
         const auto& extent = primary_source_extent(change.symbol);

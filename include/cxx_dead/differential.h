@@ -12,8 +12,8 @@
 
 namespace cxx_dead {
 
-inline constexpr int differential_report_schema_version = 1;
-inline constexpr int differential_policy_schema_version = 1;
+inline constexpr int differential_report_schema_version = 2;
+inline constexpr int differential_policy_schema_version = 2;
 
 enum class ChangeKind {
     NewSymbol,
@@ -32,7 +32,6 @@ struct DifferentialPolicy {
         Classification::DynamicallyReferenced,
     };
     std::vector<std::string> targets;
-    double minimum_confidence{0.0};
 };
 
 struct DifferentialEvidence {
@@ -47,7 +46,6 @@ struct DifferentialSymbolState {
     bool reachable{false};
     bool suppressed{false};
     std::optional<Classification> classification;
-    double confidence{0.0};
     std::vector<DifferentialEvidence> evidence;
     std::vector<Evidence> suppressions;
 };

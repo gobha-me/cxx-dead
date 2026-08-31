@@ -5,9 +5,9 @@ until the prototype has stable performance and precision measurements.
 
 ## M1 — Application-mode hardening
 
-Status: v0.16.0 limits automatic global-initializer roots to project-owned code in the selected
-link model, above the v0.15.0 topology and v0.10.0 callable foundations. Macro and broader
-language-modeling work remain open.
+Status: v0.17.0 makes symbolic evidence classifications the sole policy surface, above v0.16.0
+project-owned global-initializer roots, v0.15.0 topology, and v0.10.0 callable foundations. Macro
+and broader language-modeling work remain open.
 
 - Separate symbols needed for graph traversal from project-owned symbols eligible for reporting.
 - Represent roots, escapes, and classifications as structured evidence.
@@ -17,11 +17,12 @@ language-modeling work remain open.
   coverage completed in v0.10.0)
 - Limit global-initializer roots to project-owned linked definitions. (completed in v0.16.0)
 - Aggregate unreachable SCCs with type/file/directory ownership hints. (completed in v0.15.0)
+- Replace provisional numeric confidence with symbolic evidence policy. (completed in v0.17.0)
 - Add resource limits and explicit incomplete-run diagnostics. (completed in v0.8.0)
 - Expand the golden fixture corpus and reviewed real-project result ledger.
 
-Exit criterion: no known live symbol in the application corpus is classified as high-confidence
-dead, and every high-confidence finding has a useful explanation.
+Exit criterion: no known live symbol in the application corpus is classified `dead` or
+`likely_dead`, and every such finding has a useful explanation.
 
 ## M2 — Scalable indexing
 

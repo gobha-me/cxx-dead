@@ -10,7 +10,7 @@
 
 namespace cxx_dead {
 
-inline constexpr int report_schema_version = 11;
+inline constexpr int report_schema_version = 12;
 
 struct AnalysisMetadata {
     std::string mode{"application"};
@@ -47,7 +47,6 @@ struct FindingEvidence {
 struct Finding {
     SymbolId symbol{};
     Classification classification{Classification::LikelyDead};
-    double confidence{0.0};
     std::vector<FindingEvidence> evidence;
 };
 

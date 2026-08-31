@@ -28,7 +28,8 @@ Deliverables:
 - a result ledger recording true positives, false positives, known false negatives, indexing time, peak memory, AST bytes, symbol count, and edge count;
 - definitions for `complete`, `incomplete`, and `unsupported` analysis runs.
 
-Gate: every high-confidence fixture finding has an explanation and no known live symbol is classified high-confidence dead.
+Gate: every `dead` or `likely_dead` fixture finding has an explanation and no known live symbol has
+either classification.
 
 ## Milestone 1 — application reachability prototype
 
@@ -64,7 +65,8 @@ Remaining hardening tasks:
 3. Extend the v0.10.0 callback-registration foundation with general provider-composed roots,
    dynamic edges, YAML policy, and suppressions. (completed in v0.11.0)
 4. Add weak-component/type/directory aggregation above SCCs. (completed in v0.15.0)
-5. Replace provisional confidence numbers with configurable evidence policy.
+5. Replace provisional confidence numbers with configurable symbolic evidence policy. (completed
+   in v0.17.0)
 6. Add resource limits, cancellation, and structured incomplete-run diagnostics. (completed in
    v0.8.0)
 7. Test command normalization with launchers, response files, modules, PCH, and compiler-specific flags.
@@ -155,11 +157,12 @@ Gate: public APIs with zero internal callers are retained, while unreachable non
 
 ## Milestone 6 — differential and CI analysis
 
-Status: v0.14.0 implements explicit baseline graph ingestion, the four stable-ID transition kinds,
-strict YAML classification/target/change/confidence policy, independent exit-2 gating, and
-policy-only SARIF 2.1.0. The v0.15.1 Obscura trial validates those contracts on a pinned real change;
-v0.15.2 documents and validates the routine investigative coding-agent workflow. Hosted annotation
-upload remains workflow integration work.
+Status: v0.17.0 makes symbolic classifications the sole policy surface on top of v0.14.0 explicit
+baseline graph ingestion, the four stable-ID transition kinds, strict YAML
+classification/target/change policy, independent exit-2 gating, and policy-only SARIF 2.1.0. The
+v0.15.1 Obscura trial validates those contracts on a pinned real change; v0.15.2 documents and
+validates the routine investigative coding-agent workflow. Hosted annotation upload remains
+workflow integration work.
 
 Goal: prevent new dead-code debt without requiring historical cleanup.
 
@@ -169,7 +172,7 @@ Deliverables:
 
 - baseline artifact comparison before Git checkout orchestration;
 - `new_symbol`, `newly_unreachable`, `removed`, and `became_reachable` distinctions;
-- classification/confidence thresholds;
+- symbolic classification filters;
 - SARIF output;
 - GitHub annotations and agent-oriented compact JSON;
 - explicit baseline-incomplete behavior.
@@ -198,10 +201,11 @@ Gate: reviewed reports identify abandoned components with materially less noise 
 
 For the next implementation cycle:
 
-1. Add project-owned global initialization modeling. (completed in v0.16.0)
-2. Add unreachable weak-component aggregation. (completed in v0.15.0)
-3. Prototype a LibTooling fact collector and benchmark it against AST JSON (completed in v0.5.0).
-4. Define stable graph artifact and JSON schemas (completed in v0.6.0).
-5. Add CMake File API target ingestion (completed in v0.7.0).
+1. Replace provisional numeric confidence with symbolic evidence policy. (completed in v0.17.0)
+2. Add project-owned global initialization modeling. (completed in v0.16.0)
+3. Add unreachable weak-component aggregation. (completed in v0.15.0)
+4. Prototype a LibTooling fact collector and benchmark it against AST JSON (completed in v0.5.0).
+5. Define stable graph artifact and JSON schemas (completed in v0.6.0).
+6. Add CMake File API target ingestion (completed in v0.7.0).
 
 Do not start library inference or baseline CI policy until target identity and index completeness are reliable.

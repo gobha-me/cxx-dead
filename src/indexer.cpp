@@ -779,8 +779,10 @@ void add_factory_construction_edges(TranslationUnitState& state, std::optional<S
 }
 
 void collect_uses(const Value& node, TranslationUnitState& state, std::optional<SymbolId> caller,
-                  bool global_initializer, bool callee_position, bool top_level) {
+                  bool global_initializer, bool callee_position, bool file_context,
+                  const std::filesystem::path& inherited_file) {
     const auto kind = node.string_or("kind");
+    const auto file = node_file(node, inherited_file, state.command.directory, state.command.file);
     if (is_function_kind(kind)) {
         if (const auto declaration = state.declarations.find(node.string_or("id"));
             declaration != state.declarations.end()) {
@@ -795,8 +797,11 @@ void collect_uses(const Value& node, TranslationUnitState& state, std::optional<
         global_initializer = false;
     }
 
-    if (kind == "VarDecl" && top_level && !caller.has_value())
-        global_initializer = true;
+    if (kind == "VarDecl" && file_context && !caller.has_value()) {
+        global_initializer = has_indexed_body(symbol_scope(state, file));
+        if (!global_initializer)
+            return;
+    }
 
     if (kind == "VarDecl") {
         std::vector<SymbolId> targets;
@@ -873,9 +878,9 @@ void collect_uses(const Value& node, TranslationUnitState& state, std::optional<
                     }
                 }
             }
-            collect_uses(inner.front(), state, caller, global_initializer, true, false);
+            collect_uses(inner.front(), state, caller, global_initializer, true, false, file);
             for (std::size_t index = 1; index < inner.size(); ++index) {
-                collect_uses(inner[index], state, caller, global_initializer, false, false);
+                collect_uses(inner[index], state, caller, global_initializer, false, false, file);
             }
         }
         return;
@@ -910,9 +915,11 @@ void collect_uses(const Value& node, TranslationUnitState& state, std::optional<
         }
     }
 
-    const bool child_top_level = kind == "TranslationUnitDecl";
+    const bool child_file_context =
+        kind == "TranslationUnitDecl" || kind == "NamespaceDecl" || kind == "LinkageSpecDecl";
     for (const auto& child : children(node)) {
-        collect_uses(child, state, caller, global_initializer, callee_position, child_top_level);
+        collect_uses(child, state, caller, global_initializer, callee_position, child_file_context,
+                     file);
     }
 }
 
@@ -1376,7 +1383,7 @@ IndexResult ClangAstIndexer::index(const std::vector<CompileCommand>& commands) 
             for (const auto& ast : ast_documents)
                 collect_declarations(ast, state, "", command.file);
             for (const auto& ast : ast_documents)
-                collect_uses(ast, state, std::nullopt, false, false, false);
+                collect_uses(ast, state, std::nullopt, false, false, false, command.file);
         } catch (const std::exception& error) {
             fail_indexing(commands, result, command_index, TranslationUnitStatus::Failed,
                           "fact_collection",

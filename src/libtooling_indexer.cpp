@@ -388,6 +388,13 @@ class TranslationUnitCollector {
             (source.expansion.has_value() ? *source.expansion : source.spelling).location.file);
     }
 
+    [[nodiscard]] SymbolScope declaration_scope(const clang::VarDecl& declaration) const {
+        auto location = source_point(declaration.getLocation(), false);
+        if (location.file.empty())
+            location = source_point(declaration.getLocation(), true);
+        return symbol_scope(options_, location.file);
+    }
+
   private:
     SourcePoint source_point(clang::SourceLocation location, bool spelling) const {
         if (location.isInvalid())
@@ -571,8 +578,10 @@ class UseVisitor : public clang::RecursiveASTVisitor<UseVisitor> {
 
     bool TraverseVarDecl(clang::VarDecl* declaration) {
         if (declaration != nullptr && declaration->isFileVarDecl() && declaration->hasInit() &&
-            declaration->getDeclContext()->isTranslationUnit()) {
+            declaration->getDeclContext()->isFileContext()) {
             if (!collector_.matches_filter(*declaration))
+                return true;
+            if (!has_indexed_body(collector_.declaration_scope(*declaration)))
                 return true;
             const auto previous_caller = caller_;
             const bool previous_initializer = global_initializer_;

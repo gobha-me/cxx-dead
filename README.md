@@ -19,7 +19,7 @@ The prototype already handles:
 - address-taken functions and callable objects as provider-attributed escape evidence;
 - configurable callback-argument registration with structural/provider reachability provenance;
 - strict YAML providers for explicit roots, dynamic edges, escapes, and auditable suppressions;
-- `main()`, global-initializer calls, and manual roots;
+- `main()`, project-owned linked global-initializer calls, and manual roots;
 - an experimental declaration-name filter for namespace-scoped trials;
 - unreachable cycles using Tarjan's SCC algorithm;
 - topology-first aggregation of unreachable SCCs with auditable ownership and estimated LOC;
@@ -255,7 +255,7 @@ cxx-dead build/compile_commands.json \
   --output cxx-dead.sarif
 ```
 
-The baseline and current run must use graph artifact schema 5, identity schema 1, the same frontend,
+The baseline and current run must use graph artifact schema 6, identity schema 1, the same frontend,
 configuration ID, and selected target identity. Human and JSON differential reports include all
 `new_symbol`, `newly_unreachable`, `removed`, and `became_reachable` transitions for defined,
 reportable symbols. A new symbol is reported whether reachable or unreachable, but only an
@@ -418,7 +418,9 @@ explicit run state and per-translation-unit diagnostics, and version 6 added an 
 analysis context.
 Version 5 changed `key` to a configuration-aware stable symbol ID. Version 4 added
 complete signatures and spelling/expansion locations and definition ranges while retaining the flat
-finding `file` and `line` fields. Graph artifact schema version 5 adds public API roots; version 4
+finding `file` and `line` fields. Graph artifact schema version 6 restricts global-initializer roots
+to project-owned code in the selected link model and rejects older baselines so they are regenerated
+under the same semantics; version 5 added public API roots; version 4
 added provider suppressions and general configured roots, edges, and escapes; version 3 added callback-registration edges and
 callable-object escapes; version 2 added target context.
 Identity schema version 1 is unchanged and remains independent from the report schema.
@@ -443,6 +445,12 @@ Definitions below `--project-root` participate in reachability. When `--report-p
 whole project root is reportable for backward compatibility; otherwise only definitions below an
 explicit report path can become findings. Referenced declarations outside the project root are
 materialized lazily as opaque terminals, and excluded paths do not enter the graph.
+
+Namespace-scope initializers contribute automatic roots only when the variable's effective source
+location is below the project root and outside excluded paths. Indexed code outside a report path
+still contributes initializer roots because reporting ownership does not change execution. External
+or excluded initializer expressions contribute no roots or escape facts, and function-local static
+initializers remain conditional edges from their containing function.
 
 ## Design documents
 

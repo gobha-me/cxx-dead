@@ -123,13 +123,19 @@ files are applied canonically, so command-line order does not affect graph artif
 Current roots:
 
 - a defined function named `main`;
-- targets called by detected namespace-scope initializers;
+- targets used by namespace-scope initializers whose effective source location is indexed inside
+  the project root and outside excluded paths;
 - exact qualified or mangled names passed with `--root`.
 - exact symbols selected by a YAML provider.
 
 Each root records its typed kind, provider, and reason. Traversable edges retain equivalent provider
 evidence, while address-taking is stored separately as an escape fact with its originating symbol
 when known. Classification uses these enums and relationships; reasons are presentation metadata.
+Report paths do not gate initializer execution: both reportable and indexed non-reportable
+declarations can contribute roots. External-opaque and excluded initializer expressions contribute
+no roots or escape facts. Compilation-database mode assumes every selected command is linked;
+target mode obtains the commands from the selected transitive link closure. Function-local static
+initializers remain edges from their containing function rather than unconditional roots.
 
 An experimental `--ast-filter` limits declaration facts in both frontends. Filtered AST JSON can
 contain multiple consecutive documents; the indexer splits and merges them per translation unit.
@@ -176,7 +182,8 @@ version 9 separated actionable and provider-suppressed findings while retaining 
 provenance; version 8 added callable/provider provenance; version 7 added run state and
 translation-unit diagnostics, while version 6 added
 analysis configuration and target context, version 5 exposed stable keys, and version 4 introduced
-spelling and expansion extents. Graph artifact schema 5 adds public API roots; schema 4 added
+spelling and expansion extents. Graph artifact schema 6 records the project-owned global-root
+semantics and deliberately rejects schema-5 baselines; schema 5 added public API roots; schema 4 added
 general provider facts and suppressions; schema 3 added callable registration and escape facts;
 schema 2 added target context.
 Identity schema 1 remains independently versioned.

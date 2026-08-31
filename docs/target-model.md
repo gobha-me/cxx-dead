@@ -94,5 +94,6 @@ source of truth; generic `install(FILES|DIRECTORY)` rules are not guessed to bel
 - Missing dependency metadata is diagnosed. Missing or ambiguous required compilation commands,
   malformed replies/manifests, and a closure with no application root fail the run without findings.
 
-Report schema 11 and graph artifact schema 5 expose public API roots and separate public API,
+Report schema 11 and graph artifact schema 6 expose project-owned global roots and public API roots,
+and separate public API,
 internal-live, and internal-unreachable counts. Symbol identity schema 1 is unchanged.

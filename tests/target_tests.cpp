@@ -155,6 +155,8 @@ int main() {
                 "test-only hook was not target-relative dead in production");
         require(!has_finding(production_graph, production_report, "core::production_api"),
                 "production API was not reachable from the production executable");
+        require(has_finding(production_graph, production_report, "core::test_initializer_only"),
+                "unselected test-target initializer affected production reachability");
 
         if (cxx_dead::libtooling_available()) {
             const cxx_dead::IndexOptions options{
@@ -201,7 +203,7 @@ int main() {
              .translation_units = production.commands.size()},
             production.diagnostics);
         const auto artifact_json = cxx_dead::json::parse(artifact_output.str());
-        require(artifact_json.find("artifact_schema_version")->as_number() == 5.0 &&
+        require(artifact_json.find("artifact_schema_version")->as_number() == 6.0 &&
                     artifact_json.find("analysis_context") != nullptr,
                 "graph artifact omitted target analysis context");
 
@@ -211,6 +213,8 @@ int main() {
                 "production-only API was not target-relative dead in tests");
         require(!has_finding(test_graph, test_report, "core::testing_hook"),
                 "test hook was not reachable from the test executable");
+        require(!has_finding(test_graph, test_report, "core::test_initializer_only"),
+                "selected test-target initializer did not retain its target");
 
         const auto manifest_model =
             cxx_dead::load_target_manifest(build_root / "target-manifest.json");

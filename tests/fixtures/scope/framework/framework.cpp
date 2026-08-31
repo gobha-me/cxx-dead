@@ -1,5 +1,9 @@
 #include "framework.hpp"
 
+void indexed_initializer_target();
+
+int indexed_initialized_value = (indexed_initializer_target(), 1);
+
 namespace framework {
 
 void Application::run() {

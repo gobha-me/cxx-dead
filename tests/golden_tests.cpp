@@ -234,6 +234,7 @@ void test_golden_corpus() {
          "likely_dead",
          {},
          cxx_dead::SymbolKind::Function},
+        {"excluded_initializer_target", "void ()", true, {}, {}, cxx_dead::SymbolKind::Function},
         {"macro_live", "void ()", true, {}, {}, cxx_dead::SymbolKind::Function},
         {"macro_dead", "void ()", false, "likely_dead", {}, cxx_dead::SymbolKind::Function},
         {"operator()", "int (int) const", false, "likely_dead", {}, cxx_dead::SymbolKind::Method},
@@ -323,7 +324,7 @@ void test_golden_corpus() {
         return finding.string_or("symbol") == "operator()" &&
                finding.string_or("signature") == "int (int) const";
     });
-    require(lambda_json != findings_json.end() && lambda_json->find("line")->as_number() == 100.0 &&
+    require(lambda_json != findings_json.end() && lambda_json->find("line")->as_number() == 102.0 &&
                 lambda_json->find("component") != nullptr &&
                 lambda_json->find("weak_component") != nullptr,
             "lambda finding should retain its reconstructed source line");
@@ -357,10 +358,10 @@ void test_golden_corpus() {
     const auto macro = indexed.graph.symbols()[find_symbol(indexed.graph, "macro_dead", "void ()")];
     require(macro.source.expansion.has_value() &&
                 macro.source.spelling.location.file.filename() == "main.cpp" &&
-                macro.source.spelling.location.line == 98U &&
+                macro.source.spelling.location.line == 100U &&
                 macro.source.spelling.location.column == 17U &&
-                macro.source.spelling.begin.line == 96U &&
-                macro.source.expansion->location.line == 98U &&
+                macro.source.spelling.begin.line == 98U &&
+                macro.source.expansion->location.line == 100U &&
                 macro.source.expansion->location.column == 1U &&
                 macro.source.expansion->begin.offset != macro.source.spelling.begin.offset,
             "macro should retain distinct spelling and expansion source extents");
@@ -423,6 +424,15 @@ void test_excluded_generated_path() {
             "excluded generated definitions should not enter the project graph");
     require(matching_symbols(indexed.graph, "generated_dead").empty(),
             "excluded generated findings should not be reportable");
+    const auto excluded_initializer =
+        find_symbol(indexed.graph, "excluded_initializer_target", "void ()");
+    const auto reachability = cxx_dead::analyze_reachability(indexed.graph);
+    require(!reachability.reachable[excluded_initializer] &&
+                std::ranges::none_of(indexed.graph.roots(),
+                                     [&](const cxx_dead::Root& root) {
+                                         return root.symbol == excluded_initializer;
+                                     }),
+            "excluded initializer should not retain a project-owned target");
 }
 
 void test_incomplete_indexing_fails_closed() {

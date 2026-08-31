@@ -32,6 +32,13 @@ struct NonFactoryProduct {
     ~NonFactoryProduct() {}
 };
 
+struct GlobalProduct {
+    GlobalProduct() {}
+    ~GlobalProduct() {}
+};
+
+GlobalProduct global_product;
+
 std::unique_ptr<FactoryProduct> custom_factory();
 std::unique_ptr<NonFactoryProduct>& borrowed_product();
 std::optional<std::unique_ptr<NonFactoryProduct>> nested_product();

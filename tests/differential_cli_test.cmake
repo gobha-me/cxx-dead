@@ -41,7 +41,7 @@ if(NOT DIFF_RESULT EQUAL 2)
 endif()
 file(READ "${DIFF_REPORT}" DIFF_JSON)
 if(NOT DIFF_JSON MATCHES "\"diff_schema_version\": 1" OR
-   NOT DIFF_JSON MATCHES "\"newly_unreachable\": 3" OR
+   NOT DIFF_JSON MATCHES "\"newly_unreachable\": 4" OR
    NOT DIFF_JSON MATCHES "\"policy_matches\": 2")
     message(FATAL_ERROR "differential JSON omitted expected transitions: ${DIFF_JSON}")
 endif()

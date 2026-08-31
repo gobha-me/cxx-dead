@@ -38,7 +38,7 @@ Contract:
 
 - one compilation database is treated as one executable configuration;
 - every listed translation unit is assumed linked;
-- `main`, global-initializer calls, and configured symbols are roots;
+- `main`, calls from project-owned linked global initializers, and configured symbols are roots;
 - direct calls, construction/destruction, and conservative known override edges propagate reachability;
 - address-taking records escape evidence but does not itself imply a call;
 - only project-owned function definitions are reported;
@@ -60,7 +60,7 @@ Remaining hardening tasks:
 1. Add initial implicit-call fixture coverage for direct/alias construction, standard smart-pointer
    factories, member/base initialization, and cleanup paths. (completed in v0.9.0; broader helper
    semantics remain open)
-2. Limit global-initializer roots to project-owned, linked definitions.
+2. Limit global-initializer roots to project-owned, linked definitions. (completed in v0.16.0)
 3. Extend the v0.10.0 callback-registration foundation with general provider-composed roots,
    dynamic edges, YAML policy, and suppressions. (completed in v0.11.0)
 4. Add weak-component/type/directory aggregation above SCCs. (completed in v0.15.0)
@@ -198,7 +198,7 @@ Gate: reviewed reports identify abandoned components with materially less noise 
 
 For the next implementation cycle:
 
-1. Add project-owned global initialization modeling.
+1. Add project-owned global initialization modeling. (completed in v0.16.0)
 2. Add unreachable weak-component aggregation. (completed in v0.15.0)
 3. Prototype a LibTooling fact collector and benchmark it against AST JSON (completed in v0.5.0).
 4. Define stable graph artifact and JSON schemas (completed in v0.6.0).

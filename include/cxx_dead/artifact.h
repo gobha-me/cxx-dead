@@ -9,7 +9,7 @@
 
 namespace cxx_dead {
 
-inline constexpr int graph_artifact_schema_version = 6;
+inline constexpr int graph_artifact_schema_version = 7;
 inline constexpr int symbol_identity_schema_version = 1;
 
 struct GraphArtifactMetadata {

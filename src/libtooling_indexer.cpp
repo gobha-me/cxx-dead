@@ -11,9 +11,12 @@
 #include <clang/AST/ExprCXX.h>
 #include <clang/AST/Mangle.h>
 #include <clang/AST/RecursiveASTVisitor.h>
+#include <clang/Basic/Diagnostic.h>
+#include <clang/Basic/DiagnosticOptions.h>
 #include <clang/Basic/SourceManager.h>
 #include <clang/Frontend/CompilerInstance.h>
 #include <clang/Frontend/FrontendAction.h>
+#include <clang/Frontend/TextDiagnosticPrinter.h>
 #include <clang/Index/USRGeneration.h>
 #include <clang/Lex/Lexer.h>
 #include <clang/Lex/PPCallbacks.h>
@@ -39,6 +42,43 @@
 namespace cxx_dead {
 
 namespace {
+
+class ErrorDiagnosticConsumer : public clang::DiagnosticConsumer {
+  public:
+    ErrorDiagnosticConsumer()
+        : options_(new clang::DiagnosticOptions), printer_(llvm::errs(), options_.get()) {}
+
+    void BeginSourceFile(const clang::LangOptions& options,
+                         const clang::Preprocessor* preprocessor) override {
+        printer_.BeginSourceFile(options, preprocessor);
+    }
+
+    void EndSourceFile() override {
+        printer_.EndSourceFile();
+    }
+
+    void HandleDiagnostic(clang::DiagnosticsEngine::Level level,
+                          const clang::Diagnostic& diagnostic) override {
+        clang::DiagnosticConsumer::HandleDiagnostic(level, diagnostic);
+        printer_.HandleDiagnostic(level, diagnostic);
+        if (level < clang::DiagnosticsEngine::Error)
+            return;
+        llvm::SmallString<256> message;
+        diagnostic.FormatDiagnostic(message);
+        if (!errors_.empty())
+            errors_ += "\n";
+        errors_ += std::string(message);
+    }
+
+    [[nodiscard]] const std::string& errors() const noexcept {
+        return errors_;
+    }
+
+  private:
+    llvm::IntrusiveRefCntPtr<clang::DiagnosticOptions> options_;
+    clang::TextDiagnosticPrinter printer_;
+    std::string errors_;
+};
 
 class DependencyCollector : public clang::PPCallbacks {
   public:
@@ -957,8 +997,40 @@ IndexResult LibToolingIndexer::index(const std::vector<CompileCommand>& commands
         throw IndexingError("hard resource limits require --frontend ast-json",
                             std::move(diagnostics));
     }
-    for (std::size_t command_index = 0; command_index < commands.size(); ++command_index) {
-        const auto& command = commands[command_index];
+    std::vector<CompileCommand> normalized_commands;
+    normalized_commands.reserve(commands.size());
+    for (std::size_t index = 0; index < commands.size(); ++index) {
+        try {
+            normalized_commands.push_back(normalize_compile_command(commands[index]));
+        } catch (const std::exception& error) {
+            RunDiagnostics diagnostics{
+                .state = RunState::Incomplete,
+                .frontend = result.frontend,
+                .partial_graph_discarded = false,
+                .translation_units = {},
+            };
+            for (std::size_t diagnostic_index = 0; diagnostic_index < commands.size();
+                 ++diagnostic_index) {
+                const bool failed = diagnostic_index == index;
+                diagnostics.translation_units.push_back({
+                    .file = commands[diagnostic_index].file,
+                    .status =
+                        failed ? TranslationUnitStatus::Failed : TranslationUnitStatus::Skipped,
+                    .stage = "command_normalization",
+                    .message =
+                        failed ? error.what() : "not indexed because command normalization failed",
+                    .exit_code = std::nullopt,
+                    .signal = std::nullopt,
+                });
+            }
+            throw IndexingError("could not normalize compilation command for " +
+                                    commands[index].file.string() + ": " + error.what(),
+                                std::move(diagnostics));
+        }
+    }
+    for (std::size_t command_index = 0; command_index < normalized_commands.size();
+         ++command_index) {
+        const auto& command = normalized_commands[command_index];
         if (options_.cancellation_requested && options_.cancellation_requested()) {
             RunDiagnostics diagnostics{
                 .state = RunState::Incomplete,
@@ -974,9 +1046,10 @@ IndexResult LibToolingIndexer::index(const std::vector<CompileCommand>& commands
                 .exit_code = std::nullopt,
                 .signal = std::nullopt,
             });
-            for (std::size_t index = command_index + 1U; index < commands.size(); ++index) {
+            for (std::size_t index = command_index + 1U; index < normalized_commands.size();
+                 ++index) {
                 diagnostics.translation_units.push_back({
-                    .file = commands[index].file,
+                    .file = normalized_commands[index].file,
                     .status = TranslationUnitStatus::Skipped,
                     .stage = "indexing",
                     .message = "not indexed because an earlier translation unit did not complete",
@@ -1013,9 +1086,10 @@ IndexResult LibToolingIndexer::index(const std::vector<CompileCommand>& commands
                     .exit_code = std::nullopt,
                     .signal = std::nullopt,
                 });
-                for (std::size_t index = command_index + 1U; index < commands.size(); ++index) {
+                for (std::size_t index = command_index + 1U; index < normalized_commands.size();
+                     ++index) {
                     diagnostics.translation_units.push_back({
-                        .file = commands[index].file,
+                        .file = normalized_commands[index].file,
                         .status = TranslationUnitStatus::Skipped,
                         .stage = "indexing",
                         .message =
@@ -1068,6 +1142,8 @@ IndexResult LibToolingIndexer::index(const std::vector<CompileCommand>& commands
         std::vector<std::filesystem::path> dependencies{command.file};
         SingleCommandDatabase database(command);
         clang::tooling::ClangTool tool(database, {command.file.string()});
+        ErrorDiagnosticConsumer clang_diagnostics;
+        tool.setDiagnosticConsumer(&clang_diagnostics);
         tool.appendArgumentsAdjuster(clang::tooling::getClangStripOutputAdjuster());
         tool.appendArgumentsAdjuster(clang::tooling::getClangStripDependencyFileAdjuster());
         tool.appendArgumentsAdjuster(clang::tooling::getClangSyntaxOnlyAdjuster());
@@ -1085,9 +1161,12 @@ IndexResult LibToolingIndexer::index(const std::vector<CompileCommand>& commands
         const int exit_code = tool.run(&factory);
         result.metrics.indexing_time += std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - indexing_started);
-        if (exit_code != 0) {
-            const auto message = "Clang LibTooling indexing failed for " + command.file.string() +
-                                 " (exit " + std::to_string(exit_code) + ")";
+        if (exit_code != 0 || clang_diagnostics.getNumErrors() != 0U) {
+            const auto message =
+                "Clang LibTooling indexing failed for " + command.file.string() + " (exit " +
+                std::to_string(exit_code) + ")" +
+                (clang_diagnostics.errors().empty() ? std::string{}
+                                                    : ":\n" + clang_diagnostics.errors());
             RunDiagnostics diagnostics{
                 .state = RunState::Incomplete,
                 .frontend = result.frontend,
@@ -1102,9 +1181,10 @@ IndexResult LibToolingIndexer::index(const std::vector<CompileCommand>& commands
                 .exit_code = exit_code,
                 .signal = std::nullopt,
             });
-            for (std::size_t index = command_index + 1U; index < commands.size(); ++index) {
+            for (std::size_t index = command_index + 1U; index < normalized_commands.size();
+                 ++index) {
                 diagnostics.translation_units.push_back({
-                    .file = commands[index].file,
+                    .file = normalized_commands[index].file,
                     .status = TranslationUnitStatus::Skipped,
                     .stage = "indexing",
                     .message = "not indexed because an earlier translation unit did not complete",
@@ -1121,6 +1201,8 @@ IndexResult LibToolingIndexer::index(const std::vector<CompileCommand>& commands
                     if (dependency.is_relative())
                         dependency = command.directory / dependency;
                 }
+                dependencies.insert(dependencies.end(), command.command_inputs.begin(),
+                                    command.command_inputs.end());
                 TranslationUnitCacheEntry entry{
                     .graph = translation_unit_facts,
                     .diagnostics = translation_unit_diagnostics,
@@ -1163,9 +1245,10 @@ IndexResult LibToolingIndexer::index(const std::vector<CompileCommand>& commands
                 .exit_code = std::nullopt,
                 .signal = std::nullopt,
             });
-            for (std::size_t index = command_index + 1U; index < commands.size(); ++index) {
+            for (std::size_t index = command_index + 1U; index < normalized_commands.size();
+                 ++index) {
                 diagnostics.translation_units.push_back({
-                    .file = commands[index].file,
+                    .file = normalized_commands[index].file,
                     .status = TranslationUnitStatus::Skipped,
                     .stage = "indexing",
                     .message = "not indexed because an earlier translation unit did not complete",

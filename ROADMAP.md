@@ -5,9 +5,9 @@ until the prototype has stable performance and precision measurements.
 
 ## M1 — Application-mode hardening
 
-Status: v0.17.0 makes symbolic evidence classifications the sole policy surface, above v0.16.0
-project-owned global-initializer roots, v0.15.0 topology, and v0.10.0 callable foundations. Macro
-and broader language-modeling work remain open.
+Status: v0.18.0 adds shared fail-closed compilation-command normalization above v0.17.0 symbolic
+evidence policy, v0.16.0 project-owned global-initializer roots, v0.15.0 topology, and v0.10.0
+callable foundations. Macro and broader language-modeling work remain open.
 
 - Separate symbols needed for graph traversal from project-owned symbols eligible for reporting.
 - Represent roots, escapes, and classifications as structured evidence.
@@ -19,6 +19,8 @@ and broader language-modeling work remain open.
 - Aggregate unreachable SCCs with type/file/directory ownership hints. (completed in v0.15.0)
 - Replace provisional numeric confidence with symbolic evidence policy. (completed in v0.17.0)
 - Add resource limits and explicit incomplete-run diagnostics. (completed in v0.8.0)
+- Normalize launchers, response files, PCH/modules, and compiler-specific flags consistently.
+  (completed in v0.18.0)
 - Expand the golden fixture corpus and reviewed real-project result ledger.
 
 Exit criterion: no known live symbol in the application corpus is classified `dead` or
@@ -26,9 +28,9 @@ Exit criterion: no known live symbol in the application corpus is classified `de
 
 ## M2 — Scalable indexing
 
-Status: v0.13.0 adds dependency-validated deterministic per-TU fact caching for both frontends and
-separates cache validation, indexing, merging, traversal, SCC, and reporting telemetry. Bounded
-parallelism and large-application budget validation remain open.
+Status: v0.18.0 adds direct response/PCH/module input validation to the v0.13.0
+dependency-validated deterministic per-TU fact cache and stage telemetry. Bounded parallelism and
+large-application budget validation remain open.
 
 - Promote the measured LibTooling prototype from its optional frontend into the scalable indexing
   path without removing the dependency-light AST JSON fallback.

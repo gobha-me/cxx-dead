@@ -10,7 +10,6 @@
 #include <iomanip>
 #include <limits>
 #include <ranges>
-#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
@@ -185,47 +184,6 @@ std::optional<std::filesystem::path> resolve_executable(std::string_view executa
         search.remove_prefix(separator + 1U);
     }
     return std::nullopt;
-}
-
-std::size_t compiler_argument_index(const std::vector<std::string>& arguments) {
-    for (std::size_t index = 0; index < arguments.size(); ++index) {
-        const auto name = std::filesystem::path(arguments[index]).filename().string();
-        if (name.find("clang") != std::string::npos || name == "c++" || name == "g++" ||
-            name == "gcc" || name == "cc") {
-            return index;
-        }
-    }
-    return 0;
-}
-
-std::vector<std::string> normalized_arguments(const CompileCommand& command) {
-    const std::set<std::string, std::less<>> flags_with_value{
-        "-o", "-MF", "-MT", "-MQ", "-MJ", "--serialize-diagnostics", "-dependency-file"};
-    const std::set<std::string, std::less<>> removed_flags{
-        "-c", "-S", "-E", "-MD", "-MMD", "-MP", "-MG", "-MM", "-M", "-emit-llvm"};
-    std::vector<std::string> result;
-    const auto compiler_index = compiler_argument_index(command.arguments);
-    for (std::size_t index = compiler_index + 1U; index < command.arguments.size(); ++index) {
-        const auto& argument = command.arguments[index];
-        if (flags_with_value.contains(argument)) {
-            ++index;
-            continue;
-        }
-        if (removed_flags.contains(argument) || argument.starts_with("-o") ||
-            argument.starts_with("-MF") || argument.starts_with("-MT") ||
-            argument.starts_with("-MQ") || argument.starts_with("-MJ")) {
-            continue;
-        }
-        if (!argument.empty() && argument.front() != '-') {
-            auto possible_file = std::filesystem::path(argument);
-            if (possible_file.is_relative())
-                possible_file = command.directory / possible_file;
-            if (std::filesystem::absolute(possible_file).lexically_normal() == command.file)
-                continue;
-        }
-        result.push_back(argument);
-    }
-    return result;
 }
 
 void append_component(std::ostringstream& output, std::string_view name, std::string_view value) {
@@ -546,7 +504,7 @@ std::string translation_unit_cache_key(const CompileCommand& command, const Inde
     std::ostringstream components;
     append_component(components, "cache_schema",
                      std::to_string(translation_unit_cache_schema_version));
-    append_component(components, "extractor", "cxx-dead-0.16");
+    append_component(components, "extractor", "cxx-dead-0.18");
     try {
         append_component(components, "cxx_dead_binary", tool_fingerprint("/proc/self/exe"));
     } catch (const std::exception&) {
@@ -572,20 +530,10 @@ std::string translation_unit_cache_key(const CompileCommand& command, const Inde
     append_component(components, "verbose", options.verbose ? "1" : "0");
     append_component(components, "infer_exports", options.infer_shared_library_exports ? "1" : "0");
     append_component(components, "require_api", options.require_library_api_policy ? "1" : "0");
-    append_paths(components, "arguments", normalized_arguments(command));
-    for (const auto& argument : command.arguments) {
-        if (!argument.starts_with('@') || argument.size() == 1U)
-            continue;
-        auto response = std::filesystem::path(argument.substr(1));
-        if (response.is_relative())
-            response = command.directory / response;
-        response = std::filesystem::absolute(response).lexically_normal();
-        append_component(components, "response_path", response.generic_string());
-        try {
-            append_component(components, "response_digest", sha256_file(response));
-        } catch (const std::exception&) {
-            append_component(components, "response_digest", "unavailable");
-        }
+    append_paths(components, "arguments", command.arguments);
+    for (const auto& input : command.command_inputs) {
+        append_component(components, "command_input_path", input.generic_string());
+        append_component(components, "command_input_digest", sha256_file(input));
     }
     append_paths(components, "report_paths", options.report_paths);
     append_paths(components, "excluded_paths", options.excluded_paths);

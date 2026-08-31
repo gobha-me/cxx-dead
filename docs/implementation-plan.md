@@ -69,14 +69,16 @@ Remaining hardening tasks:
    in v0.17.0)
 6. Add resource limits, cancellation, and structured incomplete-run diagnostics. (completed in
    v0.8.0)
-7. Test command normalization with launchers, response files, modules, PCH, and compiler-specific flags.
+7. Test command normalization with launchers, response files, modules, PCH, and compiler-specific
+   flags. (completed in v0.18.0 with one shared fail-closed normalization path)
 
 ## Milestone 2 — scalable Clang frontend
 
 Status: v0.6.0 adds configuration-aware stable identities, Clang USR metadata, deterministic graph
 merging, and an independently versioned graph artifact on top of the v0.5.0 LibTooling prototype.
 v0.13.0 adds versioned per-TU persistence, compiler-dependency invalidation, and stage telemetry
-for both frontends. Bounded parallelism and the million-line budget gate remain open.
+for both frontends. v0.18.0 adds response/PCH/module command-input invalidation. Bounded parallelism
+and the million-line budget gate remain open.
 
 Goal: make application analysis viable on real repositories.
 

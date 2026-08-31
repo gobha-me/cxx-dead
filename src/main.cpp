@@ -137,7 +137,7 @@ CliOptions parse_cli(int count, char** arguments) {
             std::exit(0);
         }
         if (argument == "--version") {
-            std::cout << "cxx-dead 0.16.0\n";
+            std::cout << "cxx-dead 0.17.0\n";
             std::exit(0);
         }
         if (argument == "--compile-commands") {
@@ -547,7 +547,7 @@ int main(int argc, char** argv) {
         }
         if (differential_report.has_value() && options.format == "sarif") {
             cxx_dead::write_sarif_differential_report(*output, *differential_report,
-                                                      options.project_root, "0.16.0");
+                                                      options.project_root, "0.17.0");
         } else if (differential_report.has_value() && options.format == "json") {
             cxx_dead::write_json_differential_report(*output, *differential_report);
         } else if (differential_report.has_value()) {

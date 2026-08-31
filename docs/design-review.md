@@ -59,9 +59,11 @@ An unreachable set of methods is not identical to an unused type. Types may be u
 
 Application-private templates can be judged against observed instantiations. Public header templates are source APIs whose future external instantiations are unknowable. The index should distinguish template patterns, specializations, and instantiations and let context decide which are candidates.
 
-### 9. Numeric confidence should not initially look statistical
+### 9. Numeric confidence must not look statistical
 
-Values such as 97% are understandable, but they are not calibrated probabilities. Early versions should make evidence categories authoritative and describe scores as policy weights. Calibration can later use a reviewed corpus and track precision per classification.
+Values such as 97% are understandable, but they are not calibrated probabilities. Evidence
+categories should remain authoritative and numeric scores should stay absent until a reviewed
+corpus can calibrate precision per classification.
 
 ### 10. Differential analysis requires stable semantics
 
@@ -79,7 +81,8 @@ Full AST JSON is suitable for a dependency-light experiment, but it includes eno
 
 - Keep `application` as the only initial context and require a target-restricted compilation database.
 - Treat analysis as incomplete—and do not emit a success policy result—if any translation unit fails to index.
-- Use symbolic confidence classes as the policy surface; retain scores only as provisional metadata.
+- Use symbolic evidence classes as the policy surface; do not emit numeric scores until a reviewed
+  corpus can calibrate them.
 - Make roots carry evidence and provenance.
 - Traverse only semantically live edge kinds. Treat address escape as uncertainty until a provider explains it.
 - Add implicit-call golden tests before expanding the supported-language claim.

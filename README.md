@@ -23,7 +23,7 @@ The prototype already handles:
 - an experimental declaration-name filter for namespace-scoped trials;
 - unreachable cycles using Tarjan's SCC algorithm;
 - topology-first aggregation of unreachable SCCs with auditable ownership and estimated LOC;
-- internal-linkage confidence evidence;
+- internal-linkage classification evidence;
 - structured root, graph-edge, escape, and classification evidence;
 - separate reachability and reporting scopes for framework-aware analysis;
 - optional direct LibTooling fact extraction without full JSON AST materialization;
@@ -236,11 +236,10 @@ Compare a current complete analysis with an explicitly supplied baseline artifac
 checks out a revision or builds the baseline implicitly:
 
 ```yaml
-schema_version: 1
+schema_version: 2
 changes: [new_symbol, newly_unreachable]
 classifications: [dead, likely_dead]
 targets: [production_app]
-minimum_confidence: 0.95
 ```
 
 ```bash
@@ -262,9 +261,10 @@ reportable symbols. A new symbol is reported whether reachable or unreachable, b
 unsuppressed unreachable new symbol or newly unreachable existing symbol can match policy. SARIF
 contains only policy matches and uses current repository-relative source locations.
 
-Differential policy files are explicit schema-1 YAML. Omitted filters mean both gateable change
-kinds, every classification and target, and a zero confidence floor. Supplied lists must be
-non-empty, target names match exactly, and unknown/duplicate keys or values fail closed.
+Differential policy files are explicit schema-2 YAML. Omitted filters mean both gateable change
+kinds, every symbolic classification, and every target. Supplied lists must be non-empty, target
+names match exactly, and unknown/duplicate keys or values fail closed. Schema-1 policies and the
+removed `minimum_confidence` key are rejected rather than silently reinterpreted.
 `--fail-on-diff` requires both a baseline and policy and returns 2 on a match. A missing, malformed,
 incompatible, or incomplete baseline returns 1; it can never become a passing empty comparison.
 
@@ -401,17 +401,20 @@ The prototype assigns one of these evidence-based classifications:
 - `dynamically_referenced`: unreachable by traversable edges, but its address or callable object
   escapes.
 
-The numeric confidence values in JSON are provisional presentation values, not statistically calibrated probabilities. CI should initially filter by classification rather than treating them as measured likelihoods.
+Symbolic classifications and their typed evidence are the policy surface. Reports do not emit
+numeric confidence values, because the reviewed corpus does not provide statistically calibrated
+probabilities.
 
 Every classification is backed by an ordered evidence chain. Root, edge, and escape facts retain a
 provider and human-readable reason, while analysis decisions use typed facts rather than matching
 those presentation strings. Aggregation does not change symbol classification or policy behavior:
-schema-11 `unreachable_components` preserve the condensation DAG, link back to actionable and
+schema-12 `unreachable_components` preserve the condensation DAG, link back to actionable and
 suppressed stable keys, and label non-overlapping line-union counts as estimated LOC. Type, file,
 and immediate-parent-directory summaries annotate weak components without splitting them.
 
-JSON report schema version 11 adds topology-first unreachable aggregation; version 10 added
-separately evidenced public API, internal-live, and internal-unreachable counts; version 9 added
+JSON report schema version 12 removes uncalibrated numeric confidence while preserving symbolic
+classifications and evidence; version 11 added topology-first unreachable aggregation; version 10
+added separately evidenced public API, internal-live, and internal-unreachable counts; version 9 added
 actionable/suppressed counts and auditable `suppressed_findings`; version 8 added
 structural/provider reachability counts and provider-retained callback evidence; version 7 added
 explicit run state and per-translation-unit diagnostics, and version 6 added an application/target
@@ -424,8 +427,10 @@ under the same semantics; version 5 added public API roots; version 4
 added provider suppressions and general configured roots, edges, and escapes; version 3 added callback-registration edges and
 callable-object escapes; version 2 added target context.
 Identity schema version 1 is unchanged and remains independent from the report schema.
-Differential report schema version 1 records baseline/current contexts, the four stable-ID change
-kinds, both reachability states, classification evidence, suppressions, and policy-match status.
+Differential report schema version 2 removes numeric confidence and records baseline/current
+contexts, the four stable-ID change kinds, both reachability states, classification evidence,
+suppressions, and policy-match status. Schema-2 differential policies select matches by change
+kind, symbolic classification, target, and suppression state.
 
 ## Current analysis contract
 

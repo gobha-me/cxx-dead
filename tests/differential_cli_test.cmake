@@ -40,9 +40,10 @@ if(NOT DIFF_RESULT EQUAL 2)
     message(FATAL_ERROR "differential gate returned ${DIFF_RESULT}, expected 2: ${DIFF_ERROR}")
 endif()
 file(READ "${DIFF_REPORT}" DIFF_JSON)
-if(NOT DIFF_JSON MATCHES "\"diff_schema_version\": 1" OR
+if(NOT DIFF_JSON MATCHES "\"diff_schema_version\": 2" OR
    NOT DIFF_JSON MATCHES "\"newly_unreachable\": 4" OR
-   NOT DIFF_JSON MATCHES "\"policy_matches\": 2")
+   NOT DIFF_JSON MATCHES "\"policy_matches\": 2" OR
+   DIFF_JSON MATCHES "\"confidence\"")
     message(FATAL_ERROR "differential JSON omitted expected transitions: ${DIFF_JSON}")
 endif()
 
@@ -68,7 +69,8 @@ endif()
 file(READ "${SARIF_REPORT}" SARIF_JSON)
 if(NOT SARIF_JSON MATCHES "\"version\": \"2.1.0\"" OR
    NOT SARIF_JSON MATCHES "\"uri\": \"main.cpp\"" OR
-   SARIF_JSON MATCHES "registered_callback is dynamically_referenced")
+   SARIF_JSON MATCHES "registered_callback is dynamically_referenced" OR
+   SARIF_JSON MATCHES "\"confidence\"")
     message(FATAL_ERROR "SARIF did not contain only policy-matching current locations: ${SARIF_JSON}")
 endif()
 

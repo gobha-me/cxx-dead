@@ -2,8 +2,8 @@
 
 This is the supported routine coding-agent check for one changed C++ target. It compares a complete,
 target-scoped current graph with a compatible graph from the base revision and asks an agent to
-investigate only newly introduced high-confidence unreachable implementation. It does not detect
-semantic clones and never authorizes automatic deletion.
+investigate only newly introduced `dead` or `likely_dead` unreachable implementation. It does not
+detect semantic clones and never authorizes automatic deletion.
 
 ## Copy-ready prompt fragment
 
@@ -40,13 +40,12 @@ Run the project's relevant tests before analysis. Reconfigure and rebuild after 
 checkout from the base revision to the current revision. Keep all graphs, reports, caches, and build
 trees inside the task-owned scratch directory and remove only those paths when finished.
 
-Use this schema-1 policy for the initial adoption gate:
+Use this schema-2 symbolic policy for the initial adoption gate:
 
 ```yaml
-schema_version: 1
+schema_version: 2
 changes: [new_symbol, newly_unreachable]
 classifications: [dead, likely_dead]
-minimum_confidence: 0.95
 ```
 
 Generate the baseline graph at the base revision:

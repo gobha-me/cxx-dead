@@ -3,7 +3,6 @@
 #include "cxx_dead/json.h"
 
 #include <algorithm>
-#include <iomanip>
 #include <map>
 #include <ostream>
 #include <tuple>
@@ -16,7 +15,6 @@ Finding classify(const Graph& graph, SymbolId id, const Symbol& symbol) {
     Finding finding{
         .symbol = id,
         .classification = Classification::LikelyDead,
-        .confidence = 0.95,
         .evidence = {{
             .kind = FindingEvidenceKind::NoReachablePath,
             .evidence = {.provider = "reachability_analysis",
@@ -41,10 +39,8 @@ Finding classify(const Graph& graph, SymbolId id, const Symbol& symbol) {
 
     if (escaped) {
         finding.classification = Classification::DynamicallyReferenced;
-        finding.confidence = 0.40;
     } else if (symbol.is_virtual) {
         finding.classification = Classification::PossiblyDead;
-        finding.confidence = 0.65;
         finding.evidence.push_back({
             .kind = FindingEvidenceKind::VirtualDispatchUncertainty,
             .evidence = {.provider = "classification_policy",
@@ -54,7 +50,6 @@ Finding classify(const Graph& graph, SymbolId id, const Symbol& symbol) {
         });
     } else if (symbol.internal_linkage) {
         finding.classification = Classification::Dead;
-        finding.confidence = 0.99;
         finding.evidence.push_back({
             .kind = FindingEvidenceKind::InternalLinkage,
             .evidence = {.provider = "classification_policy",
@@ -569,8 +564,6 @@ void write_human_report(std::ostream& output, const Graph& graph,
                 write_human_source(output, symbol, "      ");
                 output << "      Kind:           " << to_string(symbol.kind) << '\n'
                        << "      Classification: " << to_string(finding->classification) << '\n'
-                       << "      Confidence:     " << std::fixed << std::setprecision(0)
-                       << finding->confidence * 100.0 << "%\n"
                        << "      Evidence:\n";
                 write_human_evidence(output, graph, finding->evidence, "        ");
             }
@@ -672,8 +665,6 @@ void write_json_report(std::ostream& output, const Graph& graph,
         write_json_source(output, symbol.source);
         output << ",\n"
                << "      \"classification\": \"" << to_string(finding.classification) << "\",\n"
-               << "      \"confidence\": " << std::fixed << std::setprecision(2)
-               << finding.confidence << ",\n"
                << "      \"component\": " << component_by_symbol[finding.symbol] << ",\n"
                << "      \"weak_component\": " << weak_component_by_symbol[finding.symbol] << ",\n"
                << "      \"evidence\": [";
